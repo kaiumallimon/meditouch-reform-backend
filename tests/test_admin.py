@@ -126,4 +126,56 @@ async def test_doctor_passphrase_and_welcome_email_dispatch(client, admin_auth):
     assert res.status_code == 201
     assert res.json()["data"]["email"] == "dr.autopass@meditouch.com"
 
+@pytest.mark.asyncio
+async def test_admin_update_and_soft_delete_doctor(client, admin_auth):
+    headers = admin_auth["headers"]
+
+    # 1. Create a doctor
+    create_res = await client.post(
+        "/api/v1/admin/doctors",
+        json={
+            "name": "Dr. Kamal Uddin",
+            "phone": "01733445566",
+            "email": "dr.kamal@meditouch.com",
+            "bmdc_reg_number": "A-55443",
+            "specialties": ["Orthopedics"],
+            "qualifications": ["MBBS", "MS (Ortho)"],
+            "experience_years": 10,
+            "consultation_fee": 700.0,
+            "bio": "Experienced orthopedic surgeon."
+        },
+        headers=headers
+    )
+    assert create_res.status_code == 201
+    doc_id = create_res.json()["data"]["id"]
+
+    # 2. Update doctor details (consultation fee, experience, name)
+    update_res = await client.patch(
+        f"/api/v1/admin/doctors/{doc_id}",
+        json={
+            "name": "Dr. Kamal Uddin Chowdhury",
+            "consultation_fee": 850.0,
+            "experience_years": 12,
+            "bio": "Senior Orthopedic Surgeon"
+        },
+        headers=headers
+    )
+    assert update_res.status_code == 200
+    updated = update_res.json()["data"]
+    assert updated["name"] == "Dr. Kamal Uddin Chowdhury"
+    assert updated["consultation_fee"] == 850.0
+    assert updated["experience_years"] == 12
+
+    # 3. Soft delete doctor
+    del_res = await client.delete(f"/api/v1/admin/doctors/{doc_id}", headers=headers)
+    assert del_res.status_code == 200
+    assert del_res.json()["data"]["deleted"] is True
+
+    # 4. Ensure doctor is excluded from general admin list
+    list_res = await client.get("/api/v1/admin/doctors", headers=headers)
+    assert list_res.status_code == 200
+    listed_ids = [d["id"] for d in list_res.json()["data"]["items"]]
+    assert doc_id not in listed_ids
+
+
 

@@ -110,3 +110,4 @@ class AuditAction(str, Enum):
 
     # Media
     MEDIA_UPLOADED = "MEDIA_UPLOADED"
+    MEDIA_DELETED = "MEDIA_DELETED"
