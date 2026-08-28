@@ -120,3 +120,4 @@ async def upload_doctor_document(
         message="Doctor verification document uploaded to CDN successfully",
         data=MediaUploadResponse(**res)
     )
+

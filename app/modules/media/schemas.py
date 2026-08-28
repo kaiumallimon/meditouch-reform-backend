@@ -23,3 +23,4 @@ class MediaUploadResponse(BaseModel):
 class MultipleMediaUploadResponse(BaseModel):
     files: List[MediaUploadResponse]
     total_files: int
+

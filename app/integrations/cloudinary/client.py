@@ -126,3 +126,4 @@ class CloudinaryCDNService:
             return False
 
 cloudinary_service = CloudinaryCDNService()
+

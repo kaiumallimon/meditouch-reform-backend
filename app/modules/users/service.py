@@ -1,10 +1,15 @@
+from typing import Optional
+from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.modules.users.repository import UserManagementRepository
 from app.modules.users.schemas import UserUpdateRequest, AddressSchema, UserDetailsResponse, MedicalProfileSchema
 from app.core.exceptions import NotFoundException
+from app.common.enums import AuditAction
+from app.core.logging import log_audit_event
 
 class UserService:
-    def __init__(self, repo: UserManagementRepository):
+    def __init__(self, repo: UserManagementRepository, db: Optional[AsyncIOMotorDatabase] = None):
         self.repo = repo
+        self.db = db if db is not None else repo.db
 
     async def get_user_details(self, user_id: str) -> UserDetailsResponse:
         user = await self.repo.get_by_id(user_id)
@@ -47,9 +52,18 @@ class UserService:
         updated_user = await self.repo.update_profile(user_id, updates)
         if not updated_user:
             raise NotFoundException("User not found")
+
+        await log_audit_event(
+            self.db,
+            user_id=user_id,
+            action=AuditAction.USER_PROFILE_UPDATED,
+            target_type="USER",
+            target_id=user_id,
+            details={"updated_fields": list(updates.keys())}
+        )
+
         return await self.get_user_details(user_id)
 
     async def add_address(self, user_id: str, address_req: AddressSchema) -> list[AddressSchema]:
         addresses = await self.repo.add_address(user_id, address_req.model_dump())
         return [AddressSchema(**a) for a in addresses]
-

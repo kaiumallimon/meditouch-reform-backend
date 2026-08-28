@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
+from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.modules.auth.repository import AuthRepository
 from app.modules.auth.schemas import (
     UserRegisterRequest,
@@ -22,12 +23,14 @@ from app.core.exceptions import (
     UnauthorizedException,
     NotFoundException
 )
-from app.common.enums import UserRole
+from app.common.enums import UserRole, AuditAction
 from app.common.utils import sanitize_phone_number
+from app.core.logging import log_audit_event
 
 class AuthService:
-    def __init__(self, repo: AuthRepository):
+    def __init__(self, repo: AuthRepository, db: Optional[AsyncIOMotorDatabase] = None):
         self.repo = repo
+        self.db = db if db is not None else repo.db
 
     async def register_user(self, req: UserRegisterRequest) -> TokenResponse:
         clean_phone = sanitize_phone_number(req.phone)
@@ -67,6 +70,15 @@ class AuthService:
         access_token = create_access_token(token_payload)
         refresh_token = create_refresh_token(token_payload)
 
+        await log_audit_event(
+            self.db,
+            user_id=created["id"],
+            action=AuditAction.USER_REGISTERED,
+            target_type="USER",
+            target_id=created["id"],
+            details={"phone": clean_phone, "name": created["name"]}
+        )
+
         return TokenResponse(
             access_token=access_token,
             refresh_token=refresh_token,
@@ -102,6 +114,15 @@ class AuthService:
 
         access_token = create_access_token(token_payload)
         refresh_token = create_refresh_token(token_payload)
+
+        await log_audit_event(
+            self.db,
+            user_id=user["id"],
+            action=AuditAction.USER_LOGIN,
+            target_type="USER",
+            target_id=user["id"],
+            details={"identifier": identifier}
+        )
 
         return TokenResponse(
             access_token=access_token,
@@ -156,7 +177,17 @@ class AuthService:
             raise BadRequestException("Current password does not match")
 
         new_hashed = hash_password(req.new_password)
-        return await self.repo.update_password(user_id, new_hashed)
+        success = await self.repo.update_password(user_id, new_hashed)
+
+        await log_audit_event(
+            self.db,
+            user_id=user_id,
+            action=AuditAction.PASSWORD_CHANGED,
+            target_type="USER",
+            target_id=user_id
+        )
+
+        return success
 
     async def get_user_profile(self, user_id: str) -> UserProfileResponse:
         user = await self.repo.get_by_id(user_id)
@@ -175,4 +206,3 @@ class AuthService:
             address=user.get("address"),
             created_at=str(user.get("created_at")) if user.get("created_at") else None
         )
-

@@ -5,9 +5,12 @@ import io
 async def test_upload_image_to_cloudinary(client, patient_auth):
     headers = patient_auth["headers"]
     
-    # 1. Simulate image file upload
-    image_content = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4"
-    files = {"file": ("avatar.png", io.BytesIO(image_content), "image/png")}
+    # 1. Valid 1x1 transparent PNG
+    valid_png_content = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4"
+        b"\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    files = {"file": ("avatar.png", io.BytesIO(valid_png_content), "image/png")}
     data = {"folder": "meditouch/profiles"}
 
     res = await client.post("/api/v1/media/upload", files=files, data=data, headers=headers)
