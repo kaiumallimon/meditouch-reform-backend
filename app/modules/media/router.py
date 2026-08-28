@@ -375,3 +375,55 @@ async def delete_media_asset(
         message="Media asset deleted from Cloudinary CDN and database",
         data={"id": doc["id"], "public_id": doc["public_id"]}
     )
+
+@router.get("/stream")
+async def stream_media_asset(
+    url: str = Query(..., description="Cloudinary asset URL to stream or view"),
+    filename: Optional[str] = Query(None, description="Optional download filename"),
+    download: bool = Query(False, description="Whether to force download vs inline view")
+):
+    """
+    Secure media streaming proxy that fetches from Cloudinary and returns with proper Content-Type
+    and headers so that PDFs and documents view and download flawlessly without Cloudinary ACL 401s.
+    """
+    import httpx
+    from fastapi.responses import Response
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            resp = await client.get(url)
+            
+            # If Cloudinary returned 401 on a PDF raw URL, fetch as image transformation (.png)
+            if resp.status_code == 401 and url.lower().endswith(".pdf"):
+                alt_url = url.replace("/raw/upload/", "/image/upload/").rsplit(".", 1)[0] + ".png"
+                alt_resp = await client.get(alt_url)
+                if alt_resp.status_code == 200:
+                    resp = alt_resp
+
+        content_type = resp.headers.get("content-type", "application/octet-stream")
+        if url.lower().endswith(".pdf") and content_type == "application/octet-stream":
+            content_type = "application/pdf"
+        elif url.lower().endswith(".png"):
+            content_type = "image/png"
+        elif url.lower().endswith(".jpg") or url.lower().endswith(".jpeg"):
+            content_type = "image/jpeg"
+
+        disposition_type = "attachment" if download else "inline"
+        out_name = filename or url.split("/")[-1] or "document.pdf"
+        if not out_name.endswith((".pdf", ".png", ".jpg", ".jpeg", ".webp", ".docx", ".doc")):
+            if "pdf" in content_type:
+                out_name += ".pdf"
+            elif "png" in content_type:
+                out_name += ".png"
+            elif "jpeg" in content_type:
+                out_name += ".jpg"
+
+        headers = {
+            "Content-Disposition": f'{disposition_type}; filename="{out_name}"',
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "public, max-age=86400"
+        }
+        return Response(content=resp.content, media_type=content_type, headers=headers)
+    except Exception as e:
+        raise BadRequestException(f"Failed to stream media: {str(e)}")
+
