@@ -62,12 +62,26 @@ async def test_non_admin_forbidden(client, patient_auth):
 async def test_audit_logs_recorded_for_sensitive_actions(client, admin_auth):
     headers = admin_auth["headers"]
 
-    # Retrieve all audit logs recorded during actions
+    # 1. Admin creates a doctor to trigger an audit event
+    create_doc_payload = {
+        "name": "Dr. Audit Test",
+        "phone": "01799881122",
+        "email": "dr.audit@meditouch.com",
+        "password": "DoctorSecret123!",
+        "bmdc_reg_number": "A-77665",
+        "specialties": ["Cardiology"],
+        "qualifications": ["MBBS"],
+        "experience_years": 5,
+        "consultation_fee": 500.0
+    }
+    await client.post("/api/v1/admin/doctors", json=create_doc_payload, headers=headers)
+
+    # 2. Retrieve all audit logs recorded
     audit_res = await client.get("/api/v1/admin/audit-logs", headers=headers)
     assert audit_res.status_code == 200
     logs = audit_res.json()["data"]["items"]
     actions = [log["action"] for log in logs]
     
-    # Verify that critical domain actions exist in audit logs
-    assert any(a in actions for a in ["DOCTOR_CREATED", "DOCTOR_VERIFIED", "USER_REGISTERED", "PAYMENT_INITIATED", "APPOINTMENT_BOOKED", "ORDER_PLACED"])
+    # Verify that DOCTOR_CREATED action exists in audit logs
+    assert "DOCTOR_CREATED" in actions
 

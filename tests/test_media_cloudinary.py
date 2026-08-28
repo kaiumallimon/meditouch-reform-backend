@@ -5,11 +5,8 @@ import io
 async def test_upload_image_to_cloudinary(client, patient_auth):
     headers = patient_auth["headers"]
     
-    # 1. Valid 1x1 transparent PNG
-    valid_png_content = (
-        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4"
-        b"\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
-    )
+    # 1. Valid 1x1 RGB red PNG
+    valid_png_content = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xff\xff?\x00\x05\xfe\x02\xfe\xa75\x81\x84\x00\x00\x00\x00IEND\xaeB`\x82'
     files = {"file": ("avatar.png", io.BytesIO(valid_png_content), "image/png")}
     data = {"folder": "meditouch/profiles"}
 
