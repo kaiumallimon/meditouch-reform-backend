@@ -1,6 +1,7 @@
 import os
 import uuid
 import time
+import re
 from typing import Optional, Dict, Any, Union
 import cloudinary
 import cloudinary.uploader
@@ -63,16 +64,25 @@ class CloudinaryCDNService:
         tags: Optional[list[str]] = None
     ) -> Dict[str, Any]:
         """
-        Uploads a file to Cloudinary CDN with automatic folder routing and returns CDN URLs.
+        Uploads a file to Cloudinary CDN with automatic folder routing and returns CDN URLs with proper file extensions.
         """
         resource_type = self.validate_file(filename, file_bytes)
         ext = os.path.splitext(filename)[1].lower().lstrip(".")
-        custom_public_id = public_id or f"{uuid.uuid4().hex[:16]}"
+        clean_base = re.sub(r'[^a-zA-Z0-9_-]', '_', os.path.splitext(filename)[0])[:35]
+        uid = uuid.uuid4().hex[:10]
+
+        # For raw files (e.g. .pdf, .doc, .docx), public_id MUST include the extension so downloads preserve the file type
+        if resource_type == "raw":
+            custom_public_id = public_id or f"{clean_base}_{uid}.{ext}"
+        else:
+            custom_public_id = public_id or f"{clean_base}_{uid}"
 
         if not self.is_configured:
             # Simulated CDN URL when credentials are not configured
             cloud_name = settings.CLOUDINARY_CLOUD_NAME or "meditouch-demo"
-            secure_url = f"https://res.cloudinary.com/{cloud_name}/{resource_type}/upload/{folder}/{custom_public_id}.{ext}"
+            secure_url = f"https://res.cloudinary.com/{cloud_name}/{resource_type}/upload/{folder}/{custom_public_id}"
+            if resource_type == "image" and not secure_url.lower().endswith(f".{ext}"):
+                secure_url = f"{secure_url}.{ext}"
             return {
                 "public_id": f"{folder}/{custom_public_id}",
                 "url": secure_url,
@@ -100,12 +110,22 @@ class CloudinaryCDNService:
             # Perform upload
             result = cloudinary.uploader.upload(file_bytes, **upload_options)
 
+            res_type = result.get("resource_type", resource_type)
+            ret_format = result.get("format") or ext
+            secure_url = result.get("secure_url") or result.get("url")
+
+            # Ensure the secure_url has a file extension so browsers do not download it as generic extensionless binary
+            if res_type == "image" and ret_format and not secure_url.lower().endswith(f".{ret_format.lower()}"):
+                secure_url = f"{secure_url}.{ret_format}"
+            elif res_type == "raw" and ext and not secure_url.lower().endswith(f".{ext.lower()}"):
+                secure_url = f"{secure_url}.{ext}"
+
             return {
                 "public_id": result.get("public_id"),
-                "url": result.get("url"),
-                "secure_url": result.get("secure_url"),
-                "format": result.get("format", ext),
-                "resource_type": result.get("resource_type", resource_type),
+                "url": secure_url,
+                "secure_url": secure_url,
+                "format": ret_format,
+                "resource_type": res_type,
                 "bytes": result.get("bytes", len(file_bytes)),
                 "original_filename": filename,
                 "folder": folder,
@@ -126,4 +146,3 @@ class CloudinaryCDNService:
             return False
 
 cloudinary_service = CloudinaryCDNService()
-
