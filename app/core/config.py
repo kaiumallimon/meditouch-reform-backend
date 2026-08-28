@@ -70,13 +70,13 @@ class Settings(BaseSettings):
 
     # SMTP Email Configuration
     SMTP_HOST: str = Field(default="smtp.gmail.com")
-    SMTP_PORT: int = Field(default=587)
+    SMTP_PORT: int = Field(default=465)
     SMTP_USER: str = Field(default="")
     SMTP_PASSWORD: str = Field(default="")
     SMTP_FROM_EMAIL: str = Field(default="noreply@meditouch.com")
     SMTP_FROM_NAME: str = Field(default="MediTouch Telemedicine")
     SMTP_TLS: bool = True
-    SMTP_SSL: bool = False
+    SMTP_SSL: bool = True
     FRONTEND_BASE_URL: str = Field(default="http://localhost:3000")
 
     model_config = SettingsConfigDict(
