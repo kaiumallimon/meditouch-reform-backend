@@ -20,6 +20,9 @@ from app.common.pagination import PaginationParams, PaginatedResponse
 from app.core.security import hash_password
 from app.core.exceptions import ConflictException, NotFoundException, BadRequestException
 from app.core.logging import log_audit_event
+from app.common.passphrase import generate_readable_passphrase
+from app.integrations.smtp import EmailService
+import asyncio
 
 class AdminService:
     def __init__(

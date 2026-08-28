@@ -7,8 +7,8 @@ from app.modules.doctors.schemas import DoctorVerificationDocSchema, DoctorProfi
 class CreateDoctorAccountRequest(BaseModel):
     name: str = Field(..., min_length=2)
     phone: str = Field(..., min_length=10)
-    email: Optional[EmailStr] = None
-    password: str = Field(..., min_length=6)
+    email: EmailStr = Field(..., description="Doctor email address where credentials will be delivered")
+    password: Optional[str] = Field(default=None, description="Optional manual password. If omitted, a readable strong passphrase will be generated and emailed.")
     bmdc_reg_number: str = Field(..., min_length=3)
     specialties: List[str] = Field(default_factory=list)
     qualifications: List[str] = Field(default_factory=list)
