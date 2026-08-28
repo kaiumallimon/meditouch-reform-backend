@@ -18,7 +18,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 def get_auth_service(db: AsyncIOMotorDatabase = Depends(get_db)) -> AuthService:
     repo = AuthRepository(db)
-    return AuthService(repo)
+    return AuthService(repo, db)
 
 @router.post("/register", response_model=APIResponse[TokenResponse], status_code=status.HTTP_201_CREATED)
 async def register(

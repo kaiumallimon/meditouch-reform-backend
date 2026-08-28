@@ -22,7 +22,7 @@ router = APIRouter(prefix="/doctors", tags=["Doctors & Telemedicine"])
 
 def get_doctor_service(db: AsyncIOMotorDatabase = Depends(get_db)) -> DoctorService:
     repo = DoctorRepository(db)
-    return DoctorService(repo)
+    return DoctorService(repo, db)
 
 @router.get("", response_model=APIResponse[PaginatedResponse[DoctorProfileResponse]])
 async def search_doctors(

@@ -1,5 +1,6 @@
 from typing import List, Optional
 from datetime import datetime, timezone
+from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.modules.doctors.repository import DoctorRepository
 from app.modules.doctors.schemas import (
     DoctorProfileResponse,
@@ -9,12 +10,14 @@ from app.modules.doctors.schemas import (
     DoctorFilterParams
 )
 from app.common.pagination import PaginationParams, PaginatedResponse
-from app.common.enums import TimeslotStatus, DoctorVerificationStatus
+from app.common.enums import TimeslotStatus, DoctorVerificationStatus, AuditAction
 from app.core.exceptions import NotFoundException, ForbiddenException, BadRequestException, ConflictException
+from app.core.logging import log_audit_event
 
 class DoctorService:
-    def __init__(self, repo: DoctorRepository):
+    def __init__(self, repo: DoctorRepository, db: Optional[AsyncIOMotorDatabase] = None):
         self.repo = repo
+        self.db = db if db is not None else repo.db
 
     async def get_doctor_profile_by_user_id(self, user_id: str) -> DoctorProfileResponse:
         doc = await self.repo.get_by_user_id(user_id)
@@ -48,6 +51,16 @@ class DoctorService:
             updates["consultation_fee"] = req.consultation_fee
 
         updated = await self.repo.update_doctor_profile(doc["id"], updates)
+
+        await log_audit_event(
+            self.db,
+            user_id=user_id,
+            action=AuditAction.DOCTOR_PROFILE_UPDATED,
+            target_type="DOCTOR",
+            target_id=doc["id"],
+            details={"updated_fields": list(updates.keys())}
+        )
+
         return DoctorProfileResponse(**updated)
 
     async def search_doctors(self, filters: DoctorFilterParams, pagination: PaginationParams) -> PaginatedResponse[DoctorProfileResponse]:
@@ -92,6 +105,15 @@ class DoctorService:
             except Exception as e:
                 raise ConflictException(f"A timeslot starting at {slot_req.start_time} already exists for this doctor")
 
+        await log_audit_event(
+            self.db,
+            user_id=user_id,
+            action=AuditAction.TIMESLOTS_CREATED,
+            target_type="TIMESLOT",
+            target_id=doc["id"],
+            details={"slots_count": len(created_slots)}
+        )
+
         return created_slots
 
     async def get_doctor_available_timeslots(self, doctor_id: str) -> List[TimeslotResponse]:
@@ -123,5 +145,13 @@ class DoctorService:
         deleted = await self.repo.delete_timeslot(timeslot_id, doc["id"])
         if not deleted:
             raise BadRequestException("Cannot delete timeslot: slot not found or not in AVAILABLE state")
-        return True
 
+        await log_audit_event(
+            self.db,
+            user_id=user_id,
+            action=AuditAction.TIMESLOT_DELETED,
+            target_type="TIMESLOT",
+            target_id=timeslot_id
+        )
+
+        return True

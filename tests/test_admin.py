@@ -57,3 +57,17 @@ async def test_non_admin_forbidden(client, patient_auth):
     # Patient trying to access admin endpoints gets 403
     res = await client.get("/api/v1/admin/dashboard/stats", headers=patient_auth["headers"])
     assert res.status_code == 403
+
+@pytest.mark.asyncio
+async def test_audit_logs_recorded_for_sensitive_actions(client, admin_auth):
+    headers = admin_auth["headers"]
+
+    # Retrieve all audit logs recorded during actions
+    audit_res = await client.get("/api/v1/admin/audit-logs", headers=headers)
+    assert audit_res.status_code == 200
+    logs = audit_res.json()["data"]["items"]
+    actions = [log["action"] for log in logs]
+    
+    # Verify that critical domain actions exist in audit logs
+    assert any(a in actions for a in ["DOCTOR_CREATED", "DOCTOR_VERIFIED", "USER_REGISTERED", "PAYMENT_INITIATED", "APPOINTMENT_BOOKED", "ORDER_PLACED"])
+

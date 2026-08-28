@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import List, Union, Any
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, field_validator
 
@@ -8,6 +8,16 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
+    LOG_LEVEL: str = "INFO"
+
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def parse_debug_bool(cls, v: Any) -> bool:
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            return v.strip().lower() in ("true", "1", "t", "yes", "y", "debug")
+        return bool(v)
 
     # MongoDB Settings
     MONGODB_URL: str = Field(default="mongodb://localhost:27017")

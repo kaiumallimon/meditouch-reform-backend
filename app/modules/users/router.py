@@ -11,7 +11,7 @@ router = APIRouter(prefix="/users", tags=["Users"])
 
 def get_user_service(db: AsyncIOMotorDatabase = Depends(get_db)) -> UserService:
     repo = UserManagementRepository(db)
-    return UserService(repo)
+    return UserService(repo, db)
 
 @router.get("/profile", response_model=APIResponse[UserDetailsResponse])
 async def get_profile(

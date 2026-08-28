@@ -74,7 +74,7 @@ async def create_medicine(
 ):
     if payload.get("role") != UserRole.ADMIN.value:
         raise ForbiddenException("Only ADMIN can create medicine records")
-    med = await service.create_medicine(req)
+    med = await service.create_medicine(req, admin_id=payload["sub"])
     return APIResponse(success=True, message="Medicine created successfully", data=med)
 
 @router.put("/admin/medicines/{medicine_id}", response_model=APIResponse[MedicineResponse])
@@ -86,7 +86,7 @@ async def update_medicine(
 ):
     if payload.get("role") != UserRole.ADMIN.value:
         raise ForbiddenException("Only ADMIN can update medicine records")
-    med = await service.update_medicine(medicine_id, req)
+    med = await service.update_medicine(medicine_id, req, admin_id=payload["sub"])
     return APIResponse(success=True, message="Medicine updated successfully", data=med)
 
 @router.post("/admin/ingest-medeasy", response_model=APIResponse[dict])
@@ -96,6 +96,6 @@ async def ingest_medeasy(
 ):
     if payload.get("role") != UserRole.ADMIN.value:
         raise ForbiddenException("Only ADMIN can trigger MedEasy catalog ingestion")
-    count = await service.trigger_medeasy_ingestion()
+    count = await service.trigger_medeasy_ingestion(admin_id=payload["sub"])
     return APIResponse(success=True, message=f"Ingested/updated {count} medicines from MedEasy", data={"count": count})
 

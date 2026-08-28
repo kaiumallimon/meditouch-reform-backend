@@ -92,6 +92,15 @@ class ConsultationService:
             expiry_seconds=settings.ZEGOCLOUD_TOKEN_EXPIRY_SECONDS
         )
 
+        await log_audit_event(
+            self.db,
+            user_id=user_id,
+            action=AuditAction.VIDEO_ROOM_TOKEN_ISSUED,
+            target_type="CONSULTATION",
+            target_id=appointment_id,
+            details={"room_id": room_id, "role": user_role}
+        )
+
         return VideoRoomTokenResponse(
             appointment_id=appointment_id,
             room_id=room_id,
