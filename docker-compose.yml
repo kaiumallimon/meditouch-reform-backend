@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: meditouch_mongodb
+    restart: always
+    environment:
+      MONGO_INITDB_DATABASE: meditouch
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: meditouch_backend
+    restart: always
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      - PROJECT_NAME=MediTouch API
+      - ENVIRONMENT=production
+      - DEBUG=False
+      - MONGODB_URL=mongodb://mongodb:27017
+      - MONGODB_DB_NAME=meditouch
+      - JWT_SECRET_KEY=meditouch_super_secret_production_key_change_me
+      - JWT_REFRESH_SECRET_KEY=meditouch_super_secret_refresh_key_change_me
+      - BKASH_SANDBOX_MODE=True
+      - BKASH_APP_KEY=sandbox_app_key
+      - BKASH_APP_SECRET=sandbox_app_secret
+      - BKASH_USERNAME=sandbox_username
+      - BKASH_PASSWORD=sandbox_password
+      - ZEGOCLOUD_APP_ID=123456789
+      - ZEGOCLOUD_SERVER_SECRET=zegocloud_server_secret_key_32bytes_sample
+    volumes:
+      - .:/app
+
+volumes:
+  mongo_data:
