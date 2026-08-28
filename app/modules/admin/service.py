@@ -53,7 +53,8 @@ class AdminService:
         if existing_bmdc:
             raise ConflictException("A doctor with this BMDC registration number already exists")
 
-        hashed_pwd = hash_password(req.password)
+        raw_password = req.password.strip() if req.password and req.password.strip() else generate_readable_passphrase()
+        hashed_pwd = hash_password(raw_password)
         user_id = str(uuid.uuid4())
         doctor_id = str(uuid.uuid4())
 
@@ -98,13 +99,24 @@ class AdminService:
         }
         created = await self.doctor_repo.create_doctor_profile(doctor_doc)
 
+        # Asynchronously dispatch welcome email with credentials
+        if req.email:
+            asyncio.create_task(
+                EmailService.send_doctor_welcome_email(
+                    name=req.name.strip(),
+                    phone=clean_phone,
+                    email=req.email.lower(),
+                    passphrase=raw_password
+                )
+            )
+
         await log_audit_event(
             self.db,
             user_id=admin_id,
             action=AuditAction.DOCTOR_CREATED,
             target_type="DOCTOR",
             target_id=doctor_id,
-            details={"bmdc": req.bmdc_reg_number, "phone": clean_phone}
+            details={"bmdc": req.bmdc_reg_number, "phone": clean_phone, "email": req.email}
         )
 
         return DoctorProfileResponse(**created)
