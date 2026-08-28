@@ -67,6 +67,12 @@ async def lifespan(app: FastAPI):
             if med_count == 0:
                 await ingest_medicine_catalog(db_manager.db)
                 logger.info("Seeded initial MedEasy medicine catalog.")
+
+        # Log SMTP Service status
+        if settings.SMTP_USER and settings.SMTP_PASSWORD:
+            logger.info(f"SMTP Email Service initialized: {settings.SMTP_HOST}:{settings.SMTP_PORT} ({settings.SMTP_FROM_EMAIL})")
+        else:
+            logger.info(f"SMTP running in Development/Mock mode (Credentials will be logged directly to console & logs)")
     except Exception as e:
         logger.warning(f"MongoDB warning during startup: {e}")
 
