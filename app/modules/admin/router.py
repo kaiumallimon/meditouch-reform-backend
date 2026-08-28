@@ -8,6 +8,7 @@ from app.modules.doctors.repository import DoctorRepository
 from app.modules.admin.service import AdminService
 from app.modules.admin.schemas import (
     CreateDoctorAccountRequest,
+    AdminUpdateDoctorRequest,
     VerifyDoctorRequest,
     UpdateDoctorStatusRequest,
     AdminDashboardStats,
@@ -46,14 +47,34 @@ async def create_doctor(
 async def list_doctors(
     verification_status: Optional[DoctorVerificationStatus] = Query(None),
     is_active: Optional[bool] = Query(None),
+    search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=100),
     payload: dict = Depends(require_admin_role),
     service: AdminService = Depends(get_admin_service)
 ):
     pagination = PaginationParams(page=page, limit=limit)
-    res = await service.list_all_doctors_admin(verification_status, is_active, pagination)
+    res = await service.list_all_doctors_admin(verification_status, is_active, search, pagination)
     return APIResponse(success=True, message="Doctors list retrieved", data=res)
+
+@router.patch("/doctors/{doctor_id}", response_model=APIResponse[DoctorProfileResponse])
+async def update_doctor(
+    doctor_id: str,
+    req: AdminUpdateDoctorRequest,
+    payload: dict = Depends(require_admin_role),
+    service: AdminService = Depends(get_admin_service)
+):
+    doc = await service.update_doctor(doctor_id, req, payload["sub"])
+    return APIResponse(success=True, message="Doctor profile updated successfully", data=doc)
+
+@router.delete("/doctors/{doctor_id}", response_model=APIResponse[dict])
+async def delete_doctor(
+    doctor_id: str,
+    payload: dict = Depends(require_admin_role),
+    service: AdminService = Depends(get_admin_service)
+):
+    await service.soft_delete_doctor(doctor_id, payload["sub"])
+    return APIResponse(success=True, message="Doctor profile removed successfully", data={"id": doctor_id, "deleted": True})
 
 @router.post("/doctors/{doctor_id}/documents", response_model=APIResponse[DoctorProfileResponse])
 async def upload_doctor_document(
@@ -103,4 +124,3 @@ async def get_audit_logs(
     pagination = PaginationParams(page=page, limit=limit)
     logs = await service.get_audit_logs(pagination)
     return APIResponse(success=True, message="Audit logs retrieved", data=logs)
-

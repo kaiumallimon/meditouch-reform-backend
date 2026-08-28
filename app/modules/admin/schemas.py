@@ -18,6 +18,20 @@ class CreateDoctorAccountRequest(BaseModel):
     avatar_url: Optional[str] = Field(default=None, description="Doctor profile picture Cloudinary URL")
     verification_documents: Optional[List[DoctorVerificationDocSchema]] = Field(default_factory=list)
 
+class AdminUpdateDoctorRequest(BaseModel):
+    name: Optional[str] = Field(None, min_length=2)
+    phone: Optional[str] = Field(None, min_length=10)
+    email: Optional[EmailStr] = None
+    bmdc_reg_number: Optional[str] = Field(None, min_length=3)
+    specialties: Optional[List[str]] = None
+    qualifications: Optional[List[str]] = None
+    experience_years: Optional[int] = None
+    consultation_fee: Optional[float] = None
+    bio: Optional[str] = None
+    avatar_url: Optional[str] = None
+    is_active: Optional[bool] = None
+    verification_status: Optional[DoctorVerificationStatus] = None
+
 class VerifyDoctorRequest(BaseModel):
     status: DoctorVerificationStatus
     rejection_reason: Optional[str] = None
