@@ -172,6 +172,13 @@ class AdminService:
             updates["avatar_url"] = req.avatar_url
             user_updates["avatar_url"] = req.avatar_url
 
+        if req.verification_documents is not None:
+            docs = [d.model_dump() for d in req.verification_documents]
+            for d in docs:
+                if not d.get("uploaded_at"):
+                    d["uploaded_at"] = datetime.now(timezone.utc)
+            updates["verification_documents"] = docs
+
         if req.is_active is not None:
             updates["is_active"] = req.is_active
             user_updates["is_active"] = req.is_active

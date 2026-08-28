@@ -29,6 +29,7 @@ class AdminUpdateDoctorRequest(BaseModel):
     consultation_fee: Optional[float] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
+    verification_documents: Optional[List[DoctorVerificationDocSchema]] = None
     is_active: Optional[bool] = None
     verification_status: Optional[DoctorVerificationStatus] = None
 
