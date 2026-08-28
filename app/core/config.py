@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     ZEGOCLOUD_SERVER_SECRET: str = Field(default="0123456789abcdef0123456789abcdef")
     ZEGOCLOUD_TOKEN_EXPIRY_SECONDS: int = 3600
 
+    # Cloudinary CDN & Storage
+    CLOUDINARY_CLOUD_NAME: str = Field(default="")
+    CLOUDINARY_API_KEY: str = Field(default="")
+    CLOUDINARY_API_SECRET: str = Field(default="")
+    CLOUDINARY_SECURE: bool = True
+
     # Business Logic Constants
     PLATFORM_FEE_PERCENTAGE: float = 10.0
     PLATFORM_DELIVERY_FEE_BDT: float = 60.0

@@ -34,6 +34,7 @@ from app.modules.notifications.router import router as notifications_router
 from app.modules.pharmacy.router import router as pharmacy_router
 from app.modules.orders.router import router as orders_router
 from app.modules.admin.router import router as admin_router
+from app.modules.media.router import router as media_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -118,6 +119,7 @@ app.include_router(notifications_router, prefix=API_PREFIX)
 app.include_router(pharmacy_router, prefix=API_PREFIX)
 app.include_router(orders_router, prefix=API_PREFIX)
 app.include_router(admin_router, prefix=API_PREFIX)
+app.include_router(media_router, prefix=API_PREFIX)
 
 @app.get("/health", tags=["Health"])
 @app.get(f"{API_PREFIX}/health", tags=["Health"])
