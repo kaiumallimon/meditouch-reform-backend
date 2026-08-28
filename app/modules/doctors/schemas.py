@@ -19,6 +19,7 @@ class DoctorProfileResponse(BaseModel):
     qualifications: List[str] = Field(default_factory=list)
     experience_years: int = 0
     bio: Optional[str] = None
+    avatar_url: Optional[str] = None
     consultation_fee: float = 0.0
     is_verified: bool = False
     verification_status: DoctorVerificationStatus = DoctorVerificationStatus.PENDING

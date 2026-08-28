@@ -65,6 +65,7 @@ class AdminService:
             "email": req.email.lower() if req.email else None,
             "hashed_password": hashed_pwd,
             "role": UserRole.DOCTOR.value,
+            "avatar_url": req.avatar_url,
             "is_active": True,
             "created_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc)
@@ -81,6 +82,7 @@ class AdminService:
             "name": req.name.strip(),
             "phone": clean_phone,
             "email": req.email.lower() if req.email else None,
+            "avatar_url": req.avatar_url,
             "bmdc_reg_number": req.bmdc_reg_number.strip(),
             "specialties": req.specialties or [],
             "qualifications": req.qualifications or [],

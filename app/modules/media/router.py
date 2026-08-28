@@ -166,3 +166,42 @@ async def upload_doctor_document(
         message="Doctor verification document uploaded to CDN successfully",
         data=MediaUploadResponse(**res)
     )
+
+@router.post("/avatar", response_model=APIResponse[MediaUploadResponse], status_code=status.HTTP_201_CREATED)
+async def upload_avatar(
+    file: UploadFile = File(...),
+    payload: dict = Depends(get_current_user_payload),
+    db: AsyncIOMotorDatabase = Depends(get_db)
+):
+    """
+    Dedicated endpoint for uploading doctor and patient profile avatars to Cloudinary CDN.
+    """
+    if not file.filename:
+        raise BadRequestException("File name is missing")
+
+    contents = await file.read()
+    if not contents:
+        raise BadRequestException("Uploaded image is empty")
+
+    res = await cloudinary_service.upload_file(
+        file_bytes=contents,
+        filename=file.filename,
+        folder=MediaFolder.PROFILES.value,
+        tags=[payload.get("sub", "user"), "avatar", "profile_picture"]
+    )
+
+    await log_audit_event(
+        db,
+        user_id=payload.get("sub"),
+        action=AuditAction.MEDIA_UPLOADED,
+        target_type="AVATAR_MEDIA",
+        target_id=res.get("public_id"),
+        details={"filename": file.filename}
+    )
+
+    return APIResponse(
+        success=True,
+        message="Doctor profile picture uploaded to CDN successfully",
+        data=MediaUploadResponse(**res)
+    )
+

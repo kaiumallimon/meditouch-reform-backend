@@ -15,6 +15,7 @@ class CreateDoctorAccountRequest(BaseModel):
     experience_years: int = 0
     consultation_fee: float = 0.0
     bio: Optional[str] = None
+    avatar_url: Optional[str] = Field(default=None, description="Doctor profile picture Cloudinary URL")
     verification_documents: Optional[List[DoctorVerificationDocSchema]] = Field(default_factory=list)
 
 class VerifyDoctorRequest(BaseModel):
