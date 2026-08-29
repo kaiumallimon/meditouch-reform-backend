@@ -64,7 +64,7 @@ async def list_users(
     search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
-    payload: dict = Depends(require_admin_or_developer_role),
+    payload: dict = Depends(require_admin_role),
     service: AdminService = Depends(get_admin_service)
 ):
     pagination = PaginationParams(page=page, limit=limit)
@@ -73,7 +73,7 @@ async def list_users(
 
 @router.get("/users/stats", response_model=APIResponse[AdminUsersStats])
 async def get_users_stats(
-    payload: dict = Depends(require_admin_or_developer_role),
+    payload: dict = Depends(require_admin_role),
     service: AdminService = Depends(get_admin_service)
 ):
     stats = await service.get_users_stats()
@@ -82,7 +82,7 @@ async def get_users_stats(
 @router.get("/users/{user_id}", response_model=APIResponse[AdminUserResponse])
 async def get_user_by_id(
     user_id: str,
-    payload: dict = Depends(require_admin_or_developer_role),
+    payload: dict = Depends(require_admin_role),
     service: AdminService = Depends(get_admin_service)
 ):
     user = await service.get_user_by_id(user_id)
