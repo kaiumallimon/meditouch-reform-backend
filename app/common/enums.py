@@ -2,7 +2,9 @@ from enum import Enum
 
 class UserRole(str, Enum):
     USER = "USER"
+    PATIENT = "PATIENT"
     DOCTOR = "DOCTOR"
+    NURSE = "NURSE"
     ADMIN = "ADMIN"
 
 class DoctorVerificationStatus(str, Enum):
@@ -72,8 +74,14 @@ class MedicineCategory(str, Enum):
 class AuditAction(str, Enum):
     # Auth
     USER_REGISTERED = "USER_REGISTERED"
+    USER_CREATED = "USER_CREATED"
+    USER_UPDATED = "USER_UPDATED"
+    USER_DELETED = "USER_DELETED"
+    USER_ACTIVATED = "USER_ACTIVATED"
+    USER_DEACTIVATED = "USER_DEACTIVATED"
     USER_LOGIN = "USER_LOGIN"
     PASSWORD_CHANGED = "PASSWORD_CHANGED"
+    PASSWORD_RESET = "PASSWORD_RESET"
 
     # User & Doctor Profiles
     USER_PROFILE_UPDATED = "USER_PROFILE_UPDATED"

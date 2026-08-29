@@ -11,6 +11,10 @@ from app.modules.admin.schemas import (
     AdminUpdateDoctorRequest,
     VerifyDoctorRequest,
     UpdateDoctorStatusRequest,
+    AdminCreateUserRequest,
+    AdminUpdateUserRequest,
+    AdminUserResponse,
+    AdminUsersStats,
     AdminDashboardStats,
     AuditLogEntry
 )
@@ -34,6 +38,80 @@ def require_admin_role(payload: dict = Depends(get_current_user_payload)) -> dic
         raise ForbiddenException("Access restricted to platform administrators only")
     return payload
 
+# =========================================================================
+# User Management Endpoints
+# =========================================================================
+@router.post("/users", response_model=APIResponse[AdminUserResponse], status_code=status.HTTP_201_CREATED)
+async def create_user(
+    req: AdminCreateUserRequest,
+    payload: dict = Depends(require_admin_role),
+    service: AdminService = Depends(get_admin_service)
+):
+    user = await service.create_user_account(req, payload["sub"])
+    return APIResponse(success=True, message=f"{req.role.value if hasattr(req.role, 'value') else req.role} account created successfully", data=user)
+
+@router.get("/users", response_model=APIResponse[PaginatedResponse[AdminUserResponse]])
+async def list_users(
+    role: Optional[str] = Query(None),
+    is_active: Optional[bool] = Query(None),
+    search: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    payload: dict = Depends(require_admin_role),
+    service: AdminService = Depends(get_admin_service)
+):
+    pagination = PaginationParams(page=page, limit=limit)
+    res = await service.list_all_users_admin(role, is_active, search, pagination)
+    return APIResponse(success=True, message="User accounts retrieved", data=res)
+
+@router.get("/users/stats", response_model=APIResponse[AdminUsersStats])
+async def get_users_stats(
+    payload: dict = Depends(require_admin_role),
+    service: AdminService = Depends(get_admin_service)
+):
+    stats = await service.get_users_stats()
+    return APIResponse(success=True, message="Users statistics retrieved", data=stats)
+
+@router.get("/users/{user_id}", response_model=APIResponse[AdminUserResponse])
+async def get_user_by_id(
+    user_id: str,
+    payload: dict = Depends(require_admin_role),
+    service: AdminService = Depends(get_admin_service)
+):
+    user = await service.get_user_by_id(user_id)
+    return APIResponse(success=True, message="User details retrieved", data=user)
+
+@router.patch("/users/{user_id}", response_model=APIResponse[AdminUserResponse])
+async def update_user(
+    user_id: str,
+    req: AdminUpdateUserRequest,
+    payload: dict = Depends(require_admin_role),
+    service: AdminService = Depends(get_admin_service)
+):
+    user = await service.update_user_account(user_id, req, payload["sub"])
+    return APIResponse(success=True, message="User updated successfully", data=user)
+
+@router.delete("/users/{user_id}", response_model=APIResponse[AdminUserResponse])
+async def soft_delete_user(
+    user_id: str,
+    payload: dict = Depends(require_admin_role),
+    service: AdminService = Depends(get_admin_service)
+):
+    user = await service.soft_delete_user_account(user_id, payload["sub"])
+    return APIResponse(success=True, message="User soft deleted successfully", data=user)
+
+@router.post("/users/{user_id}/recover-password", response_model=APIResponse[dict])
+async def send_password_recovery(
+    user_id: str,
+    payload: dict = Depends(require_admin_role),
+    service: AdminService = Depends(get_admin_service)
+):
+    res = await service.send_password_recovery(user_id, payload["sub"])
+    return APIResponse(success=True, message=res["message"], data=res)
+
+# =========================================================================
+# Doctor Management Endpoints
+# =========================================================================
 @router.post("/doctors", response_model=APIResponse[DoctorProfileResponse], status_code=status.HTTP_201_CREATED)
 async def create_doctor(
     req: CreateDoctorAccountRequest,
@@ -106,6 +184,9 @@ async def update_doctor_active_status(
     doc = await service.update_doctor_active_status(doctor_id, req, payload["sub"])
     return APIResponse(success=True, message="Doctor active status updated", data=doc)
 
+# =========================================================================
+# Dashboard & Audit Logs
+# =========================================================================
 @router.get("/dashboard/stats", response_model=APIResponse[AdminDashboardStats])
 async def get_dashboard_stats(
     payload: dict = Depends(require_admin_role),

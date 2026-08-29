@@ -177,5 +177,64 @@ async def test_admin_update_and_soft_delete_doctor(client, admin_auth):
     listed_ids = [d["id"] for d in list_res.json()["data"]["items"]]
     assert doc_id not in listed_ids
 
+@pytest.mark.asyncio
+async def test_admin_user_crud_recovery_and_stats(client, admin_auth):
+    headers = admin_auth["headers"]
+
+    # 1. Admin creates a new sub-admin account
+    create_payload = {
+        "name": "Super Moderator",
+        "phone": "01811223399",
+        "email": "mod@meditouch.com",
+        "role": "ADMIN",
+        "avatar_url": "https://res.cloudinary.com/m2nxsbff/image/upload/v1/mod.png"
+    }
+    create_res = await client.post("/api/v1/admin/users", json=create_payload, headers=headers)
+    assert create_res.status_code == 201
+    user_data = create_res.json()["data"]
+    assert user_data["name"] == "Super Moderator"
+    assert user_data["role"] == "ADMIN"
+    assert user_data["is_active"] is True
+    user_id = user_data["id"]
+
+    # 2. Get user stats
+    stats_res = await client.get("/api/v1/admin/users/stats", headers=headers)
+    assert stats_res.status_code == 200
+    stats = stats_res.json()["data"]
+    assert stats["total_users"] >= 1
+    assert stats["total_admins"] >= 1
+
+    # 3. List all users with filtering
+    list_res = await client.get("/api/v1/admin/users?role=ADMIN", headers=headers)
+    assert list_res.status_code == 200
+    items = list_res.json()["data"]["items"]
+    assert any(u["id"] == user_id for u in items)
+
+    # 4. Update user account (deactivate & update name)
+    update_res = await client.patch(
+        f"/api/v1/admin/users/{user_id}",
+        json={"name": "Moderator Updated", "is_active": False},
+        headers=headers
+    )
+    assert update_res.status_code == 200
+    assert update_res.json()["data"]["name"] == "Moderator Updated"
+    assert update_res.json()["data"]["is_active"] is False
+
+    # 5. Send password recovery email / generate passphrase
+    recover_res = await client.post(f"/api/v1/admin/users/{user_id}/recover-password", headers=headers)
+    assert recover_res.status_code == 200
+    assert "recovery" in recover_res.json()["message"].lower()
+
+    # 6. Soft delete user
+    del_res = await client.delete(f"/api/v1/admin/users/{user_id}", headers=headers)
+    assert del_res.status_code == 200
+
+    # 7. Verify soft deleted user is not in active users list
+    list_after_res = await client.get("/api/v1/admin/users", headers=headers)
+    assert list_after_res.status_code == 200
+    active_ids = [u["id"] for u in list_after_res.json()["data"]["items"]]
+    assert user_id not in active_ids
+
+
 
 

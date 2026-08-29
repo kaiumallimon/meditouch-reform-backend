@@ -104,8 +104,87 @@ class AdminRepository:
             return_document=True
         )
 
+    # =========================================================================
+    # User Management Repository Methods
+    # =========================================================================
+    async def get_all_users_admin(
+        self,
+        role: Optional[str] = None,
+        is_active: Optional[bool] = None,
+        search: Optional[str] = None,
+        include_deleted: bool = False,
+        skip: int = 0,
+        limit: int = 50
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        query: Dict[str, Any] = {}
+        if not include_deleted:
+            query["is_deleted"] = {"$ne": True}
+
+        if role:
+            query["role"] = role.value if hasattr(role, "value") else role
+        if is_active is not None:
+            query["is_active"] = is_active
+
+        if search and search.strip():
+            search_regex = {"$regex": re.escape(search.strip()), "$options": "i"}
+            query["$or"] = [
+                {"name": search_regex},
+                {"phone": search_regex},
+                {"email": search_regex},
+                {"role": search_regex}
+            ]
+
+        total = await self.db.users.count_documents(query)
+        cursor = self.db.users.find(query).skip(skip).limit(limit).sort("created_at", -1)
+        items = await cursor.to_list(length=limit)
+        return items, total
+
+    async def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+        return await self.db.users.find_one({"id": user_id, "is_deleted": {"$ne": True}})
+
+    async def update_user(self, user_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        updates["updated_at"] = datetime.now(timezone.utc)
+        return await self.db.users.find_one_and_update(
+            {"id": user_id},
+            {"$set": updates},
+            return_document=True
+        )
+
+    async def soft_delete_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        now = datetime.now(timezone.utc)
+        return await self.db.users.find_one_and_update(
+            {"id": user_id},
+            {
+                "$set": {
+                    "is_deleted": True,
+                    "is_active": False,
+                    "deleted_at": now,
+                    "updated_at": now
+                }
+            },
+            return_document=True
+        )
+
+    async def get_users_stats(self) -> Dict[str, Any]:
+        filter_base = {"is_deleted": {"$ne": True}}
+        total_users = await self.db.users.count_documents(filter_base)
+        active_users = await self.db.users.count_documents({**filter_base, "is_active": True})
+        total_patients = await self.db.users.count_documents({**filter_base, "role": {"$in": ["USER", "PATIENT"]}})
+        total_doctors = await self.db.users.count_documents({**filter_base, "role": "DOCTOR"})
+        total_nurses = await self.db.users.count_documents({**filter_base, "role": "NURSE"})
+        total_admins = await self.db.users.count_documents({**filter_base, "role": "ADMIN"})
+
+        return {
+            "total_users": total_users,
+            "active_users": active_users,
+            "total_patients": total_patients,
+            "total_doctors": total_doctors,
+            "total_nurses": total_nurses,
+            "total_admins": total_admins
+        }
+
     async def get_dashboard_stats(self) -> Dict[str, Any]:
-        total_users = await self.db.users.count_documents({"role": "USER", "is_active": True})
+        total_users = await self.db.users.count_documents({"role": "USER", "is_active": True, "is_deleted": {"$ne": True}})
         doc_filter = {"is_deleted": {"$ne": True}}
         total_doctors = await self.db.doctors.count_documents(doc_filter)
         active_doctors = await self.db.doctors.count_documents({**doc_filter, "is_active": True, "is_verified": True})
