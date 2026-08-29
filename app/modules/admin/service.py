@@ -220,11 +220,7 @@ class AdminService:
         updated_doctor = await self.repo.soft_delete_doctor(doctor_id)
 
         if existing.get("user_id"):
-            now = datetime.now(timezone.utc)
-            await self.db.users.update_one(
-                {"id": existing["user_id"]},
-                {"$set": {"is_deleted": True, "is_active": False, "deleted_at": now, "updated_at": now}}
-            )
+            await self.repo.soft_delete_user(existing["user_id"])
 
         await log_audit_event(
             self.db,
