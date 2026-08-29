@@ -11,17 +11,18 @@ class AuthRepository:
         return await self.db.users.find_one({"id": user_id})
 
     async def get_by_phone(self, phone: str) -> Optional[Dict[str, Any]]:
-        return await self.db.users.find_one({"phone": phone})
+        return await self.db.users.find_one({"phone": phone, "is_deleted": {"$ne": True}})
 
     async def get_by_email(self, email: str) -> Optional[Dict[str, Any]]:
-        return await self.db.users.find_one({"email": email.lower()})
+        return await self.db.users.find_one({"email": email.lower(), "is_deleted": {"$ne": True}})
 
     async def get_by_identifier(self, identifier: str) -> Optional[Dict[str, Any]]:
         return await self.db.users.find_one({
             "$or": [
                 {"phone": identifier},
                 {"email": identifier.lower()}
-            ]
+            ],
+            "is_deleted": {"$ne": True}
         })
 
     async def create_user(self, user_doc: Dict[str, Any]) -> Dict[str, Any]:

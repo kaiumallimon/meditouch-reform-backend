@@ -13,10 +13,10 @@ class DoctorRepository:
         return await self.db.doctors.find_one({"id": doctor_id})
 
     async def get_by_user_id(self, user_id: str) -> Optional[Dict[str, Any]]:
-        return await self.db.doctors.find_one({"user_id": user_id})
+        return await self.db.doctors.find_one({"user_id": user_id, "is_deleted": {"$ne": True}})
 
     async def get_by_bmdc(self, bmdc_reg_number: str) -> Optional[Dict[str, Any]]:
-        return await self.db.doctors.find_one({"bmdc_reg_number": bmdc_reg_number})
+        return await self.db.doctors.find_one({"bmdc_reg_number": bmdc_reg_number, "is_deleted": {"$ne": True}})
 
     async def create_doctor_profile(self, doctor_doc: Dict[str, Any]) -> Dict[str, Any]:
         if "id" not in doctor_doc:
