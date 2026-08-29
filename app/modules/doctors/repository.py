@@ -27,6 +27,8 @@ class DoctorRepository:
         await self.db.doctors.insert_one(doctor_doc)
         return doctor_doc
 
+    create = create_doctor_profile
+
     async def update_doctor_profile(self, doctor_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         updates["updated_at"] = datetime.now(timezone.utc)
         await self.db.doctors.update_one({"id": doctor_id}, {"$set": updates})
