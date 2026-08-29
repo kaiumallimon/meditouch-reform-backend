@@ -81,8 +81,8 @@ class Settings(BaseSettings):
 
     # TokenRouter LLM Configuration
     TOKENROUTER_API_KEY: str = Field(default="")
-    TOKENROUTER_BASE_URL: str = Field(default="https://api.tokenrouter.ai/v1")
-    TOKENROUTER_MODEL: str = Field(default="gpt-4o-mini")
+    TOKENROUTER_BASE_URL: str = Field(default="https://api.tokenrouter.com/v1")
+    TOKENROUTER_MODEL: str = Field(default="z-ai/glm-5.3-free")
 
     model_config = SettingsConfigDict(
         env_file=".env",
