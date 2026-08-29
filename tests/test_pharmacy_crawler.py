@@ -91,7 +91,7 @@ async def test_medicine_details_and_idempotency(client, admin_auth, mock_db):
         "source": "MedEasy"
     })
 
-    await db.medicine_details.insert_one({
+    await mock_db.medicine_details.insert_one({
         "id": "detail-coralcal-uuid",
         "medicine_id": med_id,
         "slug": slug,
