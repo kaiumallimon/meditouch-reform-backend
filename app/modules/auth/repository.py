@@ -37,7 +37,11 @@ class AuthRepository:
     async def update_password(self, user_id: str, hashed_password: str) -> bool:
         res = await self.db.users.update_one(
             {"id": user_id},
-            {"$set": {"hashed_password": hashed_password, "updated_at": datetime.now(timezone.utc)}}
+            {"$set": {
+                "hashed_password": hashed_password,
+                "password_hash": hashed_password,
+                "updated_at": datetime.now(timezone.utc)
+            }}
         )
         return res.modified_count > 0
 

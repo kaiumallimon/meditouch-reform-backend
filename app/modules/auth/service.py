@@ -52,6 +52,7 @@ class AuthService:
             "phone": clean_phone,
             "email": req.email.lower() if req.email else None,
             "hashed_password": hashed_pwd,
+            "password_hash": hashed_pwd,
             "role": UserRole.USER.value,
             "is_active": True,
             "gender": req.gender,
@@ -99,7 +100,8 @@ class AuthService:
         if not user:
             raise UnauthorizedException("Invalid phone/email or password")
 
-        if not verify_password(req.password, user.get("hashed_password", "")):
+        stored_hash = user.get("hashed_password") or user.get("password_hash") or ""
+        if not verify_password(req.password, stored_hash):
             raise UnauthorizedException("Invalid phone/email or password")
 
         if not user.get("is_active", True):
@@ -173,7 +175,8 @@ class AuthService:
         if not user:
             raise NotFoundException("User not found")
 
-        if not verify_password(req.current_password, user.get("hashed_password", "")):
+        stored_hash = user.get("hashed_password") or user.get("password_hash") or ""
+        if not verify_password(req.current_password, stored_hash):
             raise BadRequestException("Current password does not match")
 
         new_hashed = hash_password(req.new_password)
