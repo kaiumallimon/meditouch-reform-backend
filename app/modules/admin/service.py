@@ -432,6 +432,8 @@ class AdminService:
         if req.avatar_url is not None:
             updates["avatar_url"] = req.avatar_url
         if req.is_active is not None:
+            if user_id == admin_id and req.is_active is False:
+                raise BadRequestException("You cannot deactivate your own active administrator account.")
             updates["is_active"] = req.is_active
 
         if not updates:
@@ -462,6 +464,9 @@ class AdminService:
         return AdminUserResponse(**updated_user)
 
     async def soft_delete_user_account(self, user_id: str, admin_id: str) -> AdminUserResponse:
+        if user_id == admin_id:
+            raise BadRequestException("You cannot delete your own logged-in administrator account.")
+
         existing = await self.repo.get_user_by_id(user_id)
         if not existing:
             raise NotFoundException("User not found")
