@@ -216,3 +216,35 @@ class PharmacyService:
         )
 
         return MedicineResponse(**updated)
+
+    async def delete_medicine(self, medicine_id_or_slug: str, admin_id: Optional[str] = None) -> bool:
+        med = await self.repo.find_by_id_or_slug(medicine_id_or_slug)
+        if not med:
+            raise NotFoundException("Medicine not found")
+
+        deleted = await self.repo.delete_medicine(medicine_id_or_slug)
+        if deleted:
+            await log_audit_event(
+                self.db,
+                user_id=admin_id,
+                action=AuditAction.MEDICINE_DELETED,
+                target_type="MEDICINE",
+                target_id=med.get("id") or medicine_id_or_slug,
+                details={"brand": med.get("brand"), "slug": med.get("slug")}
+            )
+        return deleted
+
+    async def delete_medicines_bulk(self, ids_or_slugs: List[str], admin_id: Optional[str] = None) -> int:
+        if not ids_or_slugs:
+            return 0
+        count = await self.repo.delete_medicines_bulk(ids_or_slugs)
+        if count > 0:
+            await log_audit_event(
+                self.db,
+                user_id=admin_id,
+                action=AuditAction.MEDICINES_BULK_DELETED,
+                target_type="MEDICINE",
+                target_id="BULK",
+                details={"deleted_count": count, "targets": ids_or_slugs[:20]}
+            )
+        return count

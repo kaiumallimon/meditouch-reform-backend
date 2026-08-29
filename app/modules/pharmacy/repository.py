@@ -124,6 +124,21 @@ class PharmacyRepository:
             return_document=True
         )
 
+    async def delete_medicine(self, medicine_id_or_slug: str) -> bool:
+        res = await self.db.medicines.delete_one({
+            "$or": [{"id": medicine_id_or_slug}, {"slug": medicine_id_or_slug}]
+        })
+        return res.deleted_count > 0
+
+    async def delete_medicines_bulk(self, ids_or_slugs: List[str]) -> int:
+        res = await self.db.medicines.delete_many({
+            "$or": [
+                {"id": {"$in": ids_or_slugs}},
+                {"slug": {"$in": ids_or_slugs}}
+            ]
+        })
+        return res.deleted_count
+
     async def get_categories_summary(self) -> List[Dict[str, Any]]:
         pipeline = [
             {"$match": {"is_active": True}},

@@ -197,3 +197,26 @@ async def update_medicine(
         raise ForbiddenException("Only ADMIN can update medicine records")
     med = await service.update_medicine(medicine_id, req, admin_id=payload["sub"])
     return APIResponse(success=True, message="Medicine updated successfully", data=med)
+
+@router.delete("/admin/medicines/{medicine_id_or_slug}", response_model=APIResponse[dict])
+async def delete_medicine(
+    medicine_id_or_slug: str,
+    payload: dict = Depends(get_current_user_payload),
+    service: PharmacyService = Depends(get_pharmacy_service)
+):
+    if payload.get("role") != UserRole.ADMIN.value:
+        raise ForbiddenException("Only ADMIN can delete medicines")
+    await service.delete_medicine(medicine_id_or_slug, admin_id=payload["sub"])
+    return APIResponse(success=True, message="Medicine deleted successfully", data={"deleted": True})
+
+@router.post("/admin/medicines/bulk-delete", response_model=APIResponse[dict])
+async def delete_medicines_bulk(
+    ids: List[str],
+    payload: dict = Depends(get_current_user_payload),
+    service: PharmacyService = Depends(get_pharmacy_service)
+):
+    if payload.get("role") != UserRole.ADMIN.value:
+        raise ForbiddenException("Only ADMIN can bulk delete medicines")
+    count = await service.delete_medicines_bulk(ids, admin_id=payload["sub"])
+    return APIResponse(success=True, message=f"Successfully deleted {count} medicines", data={"deleted_count": count})
+
