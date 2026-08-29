@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     SMTP_SSL: bool = True
     FRONTEND_BASE_URL: str = Field(default="http://localhost:3000")
 
+    # TokenRouter LLM Configuration
+    TOKENROUTER_API_KEY: str = Field(default="")
+    TOKENROUTER_BASE_URL: str = Field(default="https://api.tokenrouter.ai/v1")
+    TOKENROUTER_MODEL: str = Field(default="gpt-4o-mini")
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
