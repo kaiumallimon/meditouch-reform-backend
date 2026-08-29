@@ -251,6 +251,25 @@ async def test_admin_user_crud_recovery_and_stats(client, admin_auth):
     assert self_del_res.status_code == 400
     assert "cannot delete your own" in self_del_res.json()["message"]
 
+    # 10. Re-create a new user with the EXACT SAME phone and email after soft delete
+    recreate_res = await client.post(
+        "/api/v1/admin/users",
+        json={
+            "name": "Recreated User Account",
+            "phone": "01799887766",
+            "email": "mod_super@meditouch.com",
+            "role": "ADMIN",
+            "is_active": True
+        },
+        headers=headers
+    )
+    assert recreate_res.status_code == 201
+    new_user_data = recreate_res.json()["data"]
+    assert new_user_data["phone"] == "01799887766"
+    assert new_user_data["email"] == "mod_super@meditouch.com"
+    assert new_user_data["id"] != user_id
+
+
 
 
 
