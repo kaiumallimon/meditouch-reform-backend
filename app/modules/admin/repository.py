@@ -52,19 +52,31 @@ class AdminRepository:
         )
 
     async def soft_delete_doctor(self, doctor_id: str) -> Optional[Dict[str, Any]]:
+        existing = await self.db.doctors.find_one({"id": doctor_id})
+        if not existing:
+            return None
         now = datetime.now(timezone.utc)
-        return await self.db.doctors.find_one_and_update(
+        bmdc = existing.get("bmdc_reg_number", "")
+        suffix = f"_deleted_{doctor_id}"
+        new_bmdc = f"{bmdc}{suffix}" if not bmdc.endswith(suffix) else bmdc
+
+        updated = await self.db.doctors.find_one_and_update(
             {"id": doctor_id},
             {
                 "$set": {
                     "is_deleted": True,
                     "is_active": False,
+                    "bmdc_reg_number": new_bmdc,
+                    "original_bmdc": existing.get("original_bmdc") or bmdc,
                     "deleted_at": now,
                     "updated_at": now
                 }
             },
             return_document=True
         )
+        if updated:
+            updated["bmdc_reg_number"] = existing.get("original_bmdc") or bmdc
+        return updated
 
     async def add_verification_document(self, doctor_id: str, doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         doc["uploaded_at"] = datetime.now(timezone.utc)
@@ -151,19 +163,38 @@ class AdminRepository:
         )
 
     async def soft_delete_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        existing = await self.db.users.find_one({"id": user_id})
+        if not existing:
+            return None
         now = datetime.now(timezone.utc)
-        return await self.db.users.find_one_and_update(
+        phone = existing.get("phone", "")
+        email = existing.get("email")
+        suffix = f"_deleted_{user_id}"
+
+        new_phone = f"{phone}{suffix}" if not phone.endswith(suffix) else phone
+        new_email = f"{email}{suffix}" if email and not email.endswith(suffix) else email
+
+        updated = await self.db.users.find_one_and_update(
             {"id": user_id},
             {
                 "$set": {
                     "is_deleted": True,
                     "is_active": False,
+                    "phone": new_phone,
+                    "email": new_email,
+                    "original_phone": existing.get("original_phone") or phone,
+                    "original_email": existing.get("original_email") or email,
                     "deleted_at": now,
                     "updated_at": now
                 }
             },
             return_document=True
         )
+        if updated:
+            updated["phone"] = existing.get("original_phone") or phone
+            if email:
+                updated["email"] = existing.get("original_email") or email
+        return updated
 
     async def get_users_stats(self) -> Dict[str, Any]:
         filter_base = {"is_deleted": {"$ne": True}}
