@@ -70,6 +70,7 @@ class AdminService:
             "phone": clean_phone,
             "email": str(req.email).strip().lower() if req.email else None,
             "password_hash": hashed_pwd,
+            "hashed_password": hashed_pwd,
             "role": UserRole.DOCTOR.value,
             "is_active": True,
             "is_verified": False,
@@ -343,6 +344,7 @@ class AdminService:
             "phone": clean_phone,
             "email": str(req.email).strip().lower() if req.email else None,
             "password_hash": hashed_pwd,
+            "hashed_password": hashed_pwd,
             "role": role_value,
             "avatar_url": req.avatar_url,
             "is_active": req.is_active,
@@ -501,7 +503,11 @@ class AdminService:
 
         await self.db.users.update_one(
             {"id": user_id},
-            {"$set": {"password_hash": new_hashed, "updated_at": datetime.now(timezone.utc)}}
+            {"$set": {
+                "password_hash": new_hashed,
+                "hashed_password": new_hashed,
+                "updated_at": datetime.now(timezone.utc)
+            }}
         )
 
         await log_audit_event(
