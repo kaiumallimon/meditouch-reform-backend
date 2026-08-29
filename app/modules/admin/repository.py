@@ -169,7 +169,7 @@ class AdminRepository:
         filter_base = {"is_deleted": {"$ne": True}}
         total_users = await self.db.users.count_documents(filter_base)
         active_users = await self.db.users.count_documents({**filter_base, "is_active": True})
-        total_patients = await self.db.users.count_documents({**filter_base, "role": {"$in": ["USER", "PATIENT"]}})
+        total_regular_users = await self.db.users.count_documents({**filter_base, "role": {"$in": ["USER", "PATIENT"]}})
         total_doctors = await self.db.users.count_documents({**filter_base, "role": "DOCTOR"})
         total_nurses = await self.db.users.count_documents({**filter_base, "role": "NURSE"})
         total_admins = await self.db.users.count_documents({**filter_base, "role": "ADMIN"})
@@ -177,7 +177,7 @@ class AdminRepository:
         return {
             "total_users": total_users,
             "active_users": active_users,
-            "total_patients": total_patients,
+            "total_regular_users": total_regular_users,
             "total_doctors": total_doctors,
             "total_nurses": total_nurses,
             "total_admins": total_admins

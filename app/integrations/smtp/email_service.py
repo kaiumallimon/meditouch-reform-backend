@@ -318,7 +318,7 @@ class EmailService:
         login_url: Optional[str] = None
     ) -> bool:
         """
-        Dispatches credentials email to a newly created Admin, Nurse, Doctor, or Patient account.
+        Dispatches credentials email to a newly created Admin, Nurse, Doctor, or User account.
         """
         app_url = login_url or f"{settings.FRONTEND_BASE_URL}/login"
         role_label = role.capitalize()

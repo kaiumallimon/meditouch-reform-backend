@@ -47,7 +47,7 @@ class AdminCreateUserRequest(BaseModel):
     name: str = Field(..., min_length=2)
     phone: str = Field(..., min_length=10)
     email: EmailStr = Field(..., description="User email address where credentials will be delivered")
-    role: UserRole = Field(default=UserRole.ADMIN, description="Role: ADMIN, NURSE, DOCTOR, PATIENT")
+    role: UserRole = Field(default=UserRole.ADMIN, description="Role: ADMIN, NURSE, DOCTOR, USER")
     password: Optional[str] = Field(default=None, description="Optional manual password. If omitted, a readable strong passphrase will be generated and emailed.")
     avatar_url: Optional[str] = Field(default=None, description="Optional avatar Cloudinary URL")
     is_active: bool = True
@@ -76,7 +76,7 @@ class AdminUserResponse(BaseModel):
 class AdminUsersStats(BaseModel):
     total_users: int
     active_users: int
-    total_patients: int
+    total_regular_users: int
     total_doctors: int
     total_nurses: int
     total_admins: int

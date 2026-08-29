@@ -203,6 +203,7 @@ async def test_admin_user_crud_recovery_and_stats(client, admin_auth):
     stats = stats_res.json()["data"]
     assert stats["total_users"] >= 1
     assert stats["total_admins"] >= 1
+    assert "total_regular_users" in stats
 
     # 3. List all users with filtering
     list_res = await client.get("/api/v1/admin/users?role=ADMIN", headers=headers)
