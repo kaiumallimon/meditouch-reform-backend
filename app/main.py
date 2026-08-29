@@ -62,12 +62,6 @@ async def lifespan(app: FastAPI):
                 await db_manager.db.users.insert_one(admin_user)
                 logger.info("Seeded initial platform admin user")
 
-            # med catalog seeding
-            med_count = await db_manager.db.medicines.count_documents({})
-            if med_count == 0:
-                await ingest_medicine_catalog(db_manager.db)
-                logger.info("Seeded initial MedEasy medicine catalog.")
-
         # Log SMTP Service status
         if settings.SMTP_USER and settings.SMTP_PASSWORD:
             logger.info(f"SMTP Email Service initialized: {settings.SMTP_HOST}:{settings.SMTP_PORT} ({settings.SMTP_FROM_EMAIL})")

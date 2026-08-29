@@ -171,3 +171,9 @@ class PharmacyRepository:
     async def get_crawler_job_history(self, limit: int = 10) -> List[Dict[str, Any]]:
         cursor = self.db.crawler_jobs.find().sort("started_at", -1).limit(limit)
         return await cursor.to_list(length=limit)
+
+    async def clear_all_medicines(self) -> int:
+        res = await self.db.medicines.delete_many({})
+        await self.db.medicine_details.delete_many({})
+        return res.deleted_count
+
