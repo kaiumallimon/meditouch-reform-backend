@@ -90,6 +90,10 @@ class AgentOrchestrator:
             except Exception as e:
                 logger.error(f"LLM Chat Error in agent loop: {e}")
                 yield {"event": StreamEventType.ERROR.value, "data": {"error": f"LLM error: {str(e)}"}}
+                err_msg = f"⚠️ **AI Engine Error**: {str(e)}"
+                yield {"event": StreamEventType.TOKEN.value, "data": {"delta": err_msg}}
+                yield {"event": StreamEventType.ERROR.value, "data": {"error": str(e)}}
+                final_answer = err_msg
                 break
 
             choices = response.get("choices", [])

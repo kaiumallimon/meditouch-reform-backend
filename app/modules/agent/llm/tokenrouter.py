@@ -32,6 +32,11 @@ class TokenRouterProvider(LLMProvider):
         temperature: float = 0.2,
         max_tokens: int = 4096,
     ) -> Dict[str, Any]:
+        if not self.api_key or self.api_key.strip() == "":
+            raise ValueError(
+                "TOKENROUTER_API_KEY is not configured. Please set your API key in backend/.env (e.g., TOKENROUTER_API_KEY=your_key)."
+            )
+
         payload: Dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -48,11 +53,29 @@ class TokenRouterProvider(LLMProvider):
                 f"{self.base_url}/chat/completions",
                 headers=self.headers,
                 json=payload,
+        try:
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                resp = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=self.headers,
+                    json=payload,
+                )
+                if resp.status_code != 200:
+                    logger.error(f"TokenRouter API error [{resp.status_code}]: {resp.text}")
+                    raise RuntimeError(f"TokenRouter API error ({resp.status_code}): {resp.text}")
+                return resp.json()
+        except httpx.ConnectError as e:
+            logger.error(f"Cannot connect to LLM Provider at {self.base_url}: {e}")
+            raise RuntimeError(
+                f"Cannot connect to LLM provider at '{self.base_url}'. Please verify your TOKENROUTER_BASE_URL (or check internet connection). Details: {e}"
             )
             if resp.status_code != 200:
                 logger.error(f"TokenRouter API error [{resp.status_code}]: {resp.text}")
                 raise RuntimeError(f"TokenRouter API error: {resp.status_code} - {resp.text}")
             return resp.json()
+        except httpx.RequestError as e:
+            logger.error(f"Request error to {self.base_url}: {e}")
+            raise RuntimeError(f"LLM request error to '{self.base_url}': {e}")
 
     async def stream_chat(
         self,

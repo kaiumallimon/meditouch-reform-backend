@@ -43,6 +43,9 @@ services:
       - BKASH_PASSWORD=sandbox_password
       - ZEGOCLOUD_APP_ID=123456789
       - ZEGOCLOUD_SERVER_SECRET=zegocloud_server_secret_key_32bytes_sample
+      - TOKENROUTER_API_KEY=${TOKENROUTER_API_KEY:-}
+      - TOKENROUTER_BASE_URL=${TOKENROUTER_BASE_URL:-https://api.tokenrouter.ai/v1}
+      - TOKENROUTER_MODEL=${TOKENROUTER_MODEL:-gpt-4o-mini}
     volumes:
       - .:/app
 
