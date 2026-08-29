@@ -242,8 +242,109 @@ class AdminRepository:
             "total_revenue_bdt": round(total_rev, 2)
         }
 
-    async def get_audit_logs(self, skip: int = 0, limit: int = 50) -> Tuple[List[Dict[str, Any]], int]:
-        total = await self.db.audit_logs.count_documents({})
-        cursor = self.db.audit_logs.find({}).skip(skip).limit(limit).sort("created_at", -1)
+    async def get_audit_logs(
+        self,
+        skip: int = 0,
+        limit: int = 50,
+        search: Optional[str] = None,
+        action: Optional[str] = None,
+        target_type: Optional[str] = None,
+        user_id: Optional[str] = None,
+        sort_by: str = "created_desc"
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        query: Dict[str, Any] = {}
+        if action and action != "ALL":
+            query["action"] = action
+        if target_type and target_type != "ALL":
+            query["target_type"] = target_type
+        if user_id and user_id.strip():
+            query["user_id"] = user_id.strip()
+        if search and search.strip():
+            s = search.strip()
+            query["$or"] = [
+                {"action": {"$regex": s, "$options": "i"}},
+                {"target_type": {"$regex": s, "$options": "i"}},
+                {"target_id": {"$regex": s, "$options": "i"}},
+                {"user_id": {"$regex": s, "$options": "i"}},
+                {"ip_address": {"$regex": s, "$options": "i"}}
+            ]
+
+        sort_field = "created_at"
+        sort_dir = -1
+        if sort_by == "created_asc":
+            sort_dir = 1
+        elif sort_by == "action_asc":
+            sort_field = "action"
+            sort_dir = 1
+        elif sort_by == "action_desc":
+            sort_field = "action"
+            sort_dir = -1
+
+        total = await self.db.audit_logs.count_documents(query)
+        cursor = self.db.audit_logs.find(query).sort(sort_field, sort_dir).skip(skip).limit(limit)
         items = await cursor.to_list(length=limit)
         return items, total
+
+    async def get_audit_stats(self) -> Dict[str, Any]:
+        pipeline = [
+            {
+                "$group": {
+                    "_id": None,
+                    "total_logs": {"$sum": 1},
+                    "auth_events": {
+                        "$sum": {
+                            "$cond": [
+                                {"$in": ["$action", ["USER_LOGIN", "USER_REGISTERED", "USER_CREATED", "PASSWORD_CHANGED", "PASSWORD_RESET"]]},
+                                1,
+                                0
+                            ]
+                        }
+                    },
+                    "pharmacy_events": {
+                        "$sum": {
+                            "$cond": [
+                                {"$in": ["$action", ["MEDICINE_CREATED", "MEDICINE_UPDATED", "MEDICINE_DELETED", "MEDICINES_BULK_DELETED", "MEDEASY_INGESTION_TRIGGERED", "ORDER_PLACED", "ORDER_STATUS_CHANGED"]]},
+                                1,
+                                0
+                            ]
+                        }
+                    },
+                    "clinical_events": {
+                        "$sum": {
+                            "$cond": [
+                                {"$in": ["$action", ["DOCTOR_VERIFIED", "DOCTOR_REJECTED", "DOCTOR_ACTIVATED", "DOCTOR_DEACTIVATED", "APPOINTMENT_BOOKED", "APPOINTMENT_CONFIRMED", "APPOINTMENT_CANCELLED", "CONSULTATION_COMPLETED", "DOCTOR_CREATED"]]},
+                                1,
+                                0
+                            ]
+                        }
+                    },
+                    "admin_events": {
+                        "$sum": {
+                            "$cond": [
+                                {"$in": ["$action", ["SETTINGS_UPDATED", "PLATFORM_FEE_UPDATED", "USER_ACTIVATED", "USER_DEACTIVATED", "USER_DELETED", "USER_UPDATED"]]},
+                                1,
+                                0
+                            ]
+                        }
+                    }
+                }
+            }
+        ]
+        results = await self.db.audit_logs.aggregate(pipeline).to_list(length=1)
+        if results:
+            r = results[0]
+            return {
+                "total_logs": r.get("total_logs", 0),
+                "auth_events": r.get("auth_events", 0),
+                "pharmacy_events": r.get("pharmacy_events", 0),
+                "clinical_events": r.get("clinical_events", 0),
+                "admin_events": r.get("admin_events", 0),
+            }
+        total = await self.db.audit_logs.count_documents({})
+        return {
+            "total_logs": total,
+            "auth_events": 0,
+            "pharmacy_events": 0,
+            "clinical_events": 0,
+            "admin_events": 0
+        }

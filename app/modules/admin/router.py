@@ -16,6 +16,7 @@ from app.modules.admin.schemas import (
     AdminUserResponse,
     AdminUsersStats,
     AdminDashboardStats,
+    AuditStatsResponse,
     AuditLogEntry
 )
 from app.modules.doctors.schemas import DoctorProfileResponse, DoctorVerificationDocSchema
@@ -195,13 +196,34 @@ async def get_dashboard_stats(
     stats = await service.get_dashboard_stats()
     return APIResponse(success=True, message="Dashboard statistics retrieved", data=stats)
 
+@router.get("/audit-logs/stats", response_model=APIResponse[AuditStatsResponse])
+async def get_audit_stats(
+    payload: dict = Depends(require_admin_role),
+    service: AdminService = Depends(get_admin_service)
+):
+    stats = await service.get_audit_stats()
+    return APIResponse(success=True, message="Audit log statistics retrieved", data=stats)
+
 @router.get("/audit-logs", response_model=APIResponse[PaginatedResponse[AuditLogEntry]])
 async def get_audit_logs(
     page: int = Query(1, ge=1),
-    limit: int = Query(50, ge=1, le=100),
+    limit: int = Query(25, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    action: Optional[str] = Query(None),
+    target_type: Optional[str] = Query(None),
+    user_id: Optional[str] = Query(None),
+    sort_by: Optional[str] = Query("created_desc"),
     payload: dict = Depends(require_admin_role),
     service: AdminService = Depends(get_admin_service)
 ):
     pagination = PaginationParams(page=page, limit=limit)
-    logs = await service.get_audit_logs(pagination)
+    logs = await service.get_audit_logs(
+        pagination=pagination,
+        search=search,
+        action=action,
+        target_type=target_type,
+        user_id=user_id,
+        sort_by=sort_by or "created_desc"
+    )
     return APIResponse(success=True, message="Audit logs retrieved", data=logs)
+

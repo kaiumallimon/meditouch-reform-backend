@@ -536,7 +536,157 @@ class AdminService:
         stats = await self.repo.get_dashboard_stats()
         return AdminDashboardStats(**stats)
 
-    async def get_audit_logs(self, pagination: PaginationParams) -> PaginatedResponse[AuditLogEntry]:
-        docs, total = await self.repo.get_audit_logs(skip=pagination.skip, limit=pagination.limit)
-        items = [AuditLogEntry(**d) for d in docs]
+    async def get_audit_stats(self) -> AuditStatsResponse:
+        stats = await self.repo.get_audit_stats()
+        return AuditStatsResponse(**stats)
+
+    async def get_audit_logs(
+        self,
+        pagination: PaginationParams,
+        search: Optional[str] = None,
+        action: Optional[str] = None,
+        target_type: Optional[str] = None,
+        user_id: Optional[str] = None,
+        sort_by: str = "created_desc"
+    ) -> PaginatedResponse[AuditLogEntry]:
+        docs, total = await self.repo.get_audit_logs(
+            skip=pagination.skip,
+            limit=pagination.limit,
+            search=search,
+            action=action,
+            target_type=target_type,
+            user_id=user_id,
+            sort_by=sort_by
+        )
+        items: List[AuditLogEntry] = []
+        for d in docs:
+            doc_id = str(d.pop("_id", d.get("id", "")))
+            act = str(d.get("action", ""))
+            tt = str(d.get("target_type", ""))
+            tid = d.get("target_id")
+            uid = d.get("user_id")
+            dt = d.get("details") or {}
+            
+            # Generate human-readable message if not explicitly stored
+            msg = d.get("message") or self._generate_audit_message(act, tt, tid, dt, uid)
+            
+            items.append(
+                AuditLogEntry(
+                    id=doc_id,
+                    user_id=uid,
+                    action=act,
+                    target_type=tt,
+                    target_id=tid,
+                    details=dt,
+                    ip_address=d.get("ip_address"),
+                    created_at=d.get("created_at"),
+                    message=msg
+                )
+            )
         return PaginatedResponse.create(items=items, total=total, params=pagination)
+
+    def _generate_audit_message(
+        self,
+        action: str,
+        target_type: str,
+        target_id: Optional[str],
+        details: Optional[Dict[str, Any]],
+        user_id: Optional[str]
+    ) -> str:
+        details = details or {}
+        act = (action or "").upper()
+
+        if act == "USER_LOGIN":
+            return "User signed in successfully"
+        if act == "USER_REGISTERED":
+            identity = details.get("phone_number") or details.get("email") or target_id or "Patient"
+            return f"New account registered ({identity})"
+        if act == "USER_CREATED":
+            name = details.get("full_name") or target_id or "User"
+            return f"User account created by administrative action ({name})"
+        if act == "USER_UPDATED":
+            fields = details.get("updated_fields") or list(details.keys())
+            return f"User profile updated ({', '.join(fields) if fields else 'Profile info'})"
+        if act == "USER_DELETED":
+            return f"User account ({target_id or 'ID'}) permanently removed"
+        if act == "USER_ACTIVATED":
+            return f"User account ({target_id or 'ID'}) activated"
+        if act == "USER_DEACTIVATED":
+            return f"User account ({target_id or 'ID'}) deactivated"
+        if act == "PASSWORD_CHANGED":
+            return "Security password changed"
+        if act == "PASSWORD_RESET":
+            return "Password reset requested & updated"
+
+        # Doctor Actions
+        if act == "DOCTOR_CREATED":
+            return f"Doctor profile created for {details.get('full_name', target_id or 'Doctor')}"
+        if act == "DOCTOR_VERIFIED":
+            bmdc = details.get("bmdc_number", "")
+            return f"Doctor credentials verified & approved{f' (BMDC #{bmdc})' if bmdc else ''}"
+        if act == "DOCTOR_REJECTED":
+            reason = details.get("rejection_reason", "Credentials invalid")
+            return f"Doctor application rejected: {reason}"
+        if act == "DOCTOR_ACTIVATED":
+            return f"Doctor profile activated for clinical practice"
+        if act == "DOCTOR_DEACTIVATED":
+            return f"Doctor profile deactivated"
+        if act == "DOCTOR_PROFILE_UPDATED":
+            return "Doctor professional credentials/schedule updated"
+
+        # Telemedicine & Consultations
+        if act == "APPOINTMENT_BOOKED":
+            return f"Appointment scheduled with Doctor ({target_id or 'Doctor'})"
+        if act == "APPOINTMENT_CONFIRMED":
+            return f"Appointment #{target_id or ''} confirmed"
+        if act == "APPOINTMENT_CANCELLED":
+            reason = details.get("reason", "Cancelled")
+            return f"Appointment #{target_id or ''} cancelled ({reason})"
+        if act == "VIDEO_ROOM_TOKEN_ISSUED":
+            return "Encrypted video room session token issued"
+        if act == "CONSULTATION_COMPLETED":
+            return f"Clinical consultation #{target_id or ''} completed"
+
+        # Payments & Orders
+        if act == "PAYMENT_INITIATED":
+            amt = details.get("amount", "")
+            return f"Payment checkout initiated ({amt} BDT via {details.get('provider', 'Gateway')})"
+        if act == "PAYMENT_COMPLETED":
+            amt = details.get("amount", "")
+            return f"Payment transaction verified & settled ({amt} BDT)"
+        if act == "PAYMENT_REFUNDED":
+            amt = details.get("amount", "")
+            return f"Payment refund processed ({amt} BDT)"
+        if act == "ORDER_PLACED":
+            return f"Prescription/medicine order #{target_id or ''} placed"
+        if act == "ORDER_STATUS_CHANGED":
+            return f"Order #{target_id or ''} status changed to {details.get('status', 'UPDATED')}"
+
+        # Pharmacy & Catalog
+        if act == "MEDICINE_CREATED":
+            name = details.get("medicine_name", target_id or "Medicine")
+            return f"Medicine '{name}' added to pharmaceutical catalog"
+        if act == "MEDICINE_UPDATED":
+            name = details.get("medicine_name", target_id or "Medicine")
+            return f"Medicine '{name}' profile updated"
+        if act == "MEDICINE_DELETED":
+            name = details.get("medicine_name", target_id or "Medicine")
+            return f"Medicine '{name}' removed from catalog"
+        if act == "MEDICINES_BULK_DELETED":
+            cnt = details.get("count", len(details.get("ids", [])) or "multiple")
+            return f"Bulk removed {cnt} medicine records from catalog"
+        if act == "MEDEASY_INGESTION_TRIGGERED":
+            cat = details.get("category_name") or details.get("category_slug") or "OTC"
+            return f"Triggered real-time crawler ingestion for '{cat}'"
+
+        # Admin & System
+        if act == "PLATFORM_FEE_UPDATED":
+            fee = details.get("platform_fee_bdt", "")
+            return f"System platform consultation fee updated to {fee} BDT"
+        if act == "SETTINGS_UPDATED":
+            return "System configuration settings updated"
+
+        clean_action = act.replace("_", " ").title()
+        clean_target = (target_type or "system").title()
+        return f"{clean_action} performed on {clean_target}"
+

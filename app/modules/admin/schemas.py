@@ -94,6 +94,13 @@ class AdminDashboardStats(BaseModel):
     total_orders: int
     total_revenue_bdt: float
 
+class AuditStatsResponse(BaseModel):
+    total_logs: int
+    auth_events: int
+    pharmacy_events: int
+    clinical_events: int
+    admin_events: int
+
 class AuditLogEntry(BaseModel):
     id: Optional[str] = None
     user_id: Optional[str] = None
@@ -103,3 +110,4 @@ class AuditLogEntry(BaseModel):
     details: Optional[Dict[str, Any]] = None
     ip_address: Optional[str] = None
     created_at: datetime
+    message: Optional[str] = None
