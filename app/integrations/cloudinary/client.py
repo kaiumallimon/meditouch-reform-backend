@@ -15,8 +15,8 @@ ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".txt"}
 ALLOWED_ALL_EXTENSIONS = ALLOWED_IMAGE_EXTENSIONS | ALLOWED_DOCUMENT_EXTENSIONS
 
 # Max file sizes
-MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024       # 10 MB
-MAX_DOCUMENT_SIZE_BYTES = 20 * 1024 * 1024    # 20 MB
+MAX_IMAGE_SIZE_BYTES = 500 * 1024             # 500 KB (for profile picture / avatar / images)
+MAX_DOCUMENT_SIZE_BYTES = 1 * 1024 * 1024      # 1 MB (for uploaded PDF / doctor documents)
 
 class CloudinaryCDNService:
     def __init__(self):
@@ -40,8 +40,8 @@ class CloudinaryCDNService:
     def validate_file(self, filename: str, file_bytes: bytes) -> str:
         """
         Validates file extension and size. Returns resource_type ('image' or 'raw').
-        All documents (PDF, DOC, DOCX, TXT) are designated as 'raw'.
-        All images (JPG, PNG, WEBP, GIF, SVG) are designated as 'image'.
+        All documents (PDF, DOC, DOCX, TXT) are designated as 'raw' (max 1 MB).
+        All images (JPG, PNG, WEBP, GIF, SVG) are designated as 'image' (max 500 KB).
         """
         ext = os.path.splitext(filename)[1].lower()
         if ext not in ALLOWED_ALL_EXTENSIONS:
@@ -52,8 +52,12 @@ class CloudinaryCDNService:
         is_image = ext in ALLOWED_IMAGE_EXTENSIONS
         max_size = MAX_IMAGE_SIZE_BYTES if is_image else MAX_DOCUMENT_SIZE_BYTES
         if len(file_bytes) > max_size:
-            max_mb = max_size // (1024 * 1024)
-            raise BadRequestException(f"File size exceeds maximum allowed limit of {max_mb}MB.")
+            if is_image:
+                uploaded_kb = len(file_bytes) / 1024
+                raise BadRequestException(f"Profile picture / image size cannot exceed 500 KB (uploaded file: {uploaded_kb:.1f} KB).")
+            else:
+                uploaded_mb = len(file_bytes) / (1024 * 1024)
+                raise BadRequestException(f"Uploaded document / PDF size cannot exceed 1 MB (uploaded file: {uploaded_mb:.2f} MB).")
 
         return "image" if is_image else "raw"
 
