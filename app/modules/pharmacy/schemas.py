@@ -5,31 +5,31 @@ from app.common.enums import MedicineCategory
 
 class UnitPriceItem(BaseModel):
     id: Optional[Any] = None
-    unit: str
-    unit_size: int
-    price: float
+    unit: Optional[str] = "Unit"
+    unit_size: Optional[int] = 1
+    price: Optional[float] = 0.0
 
 class MedicineResponse(BaseModel):
     id: str
     medeasy_id: Optional[Any] = None
     medicine_name: Optional[str] = None
     name: Optional[str] = None
-    brand: str
-    generic_name: str
-    strength: str = ""
-    dosage_form: str = "Tablet"
+    brand: Optional[str] = ""
+    generic_name: Optional[str] = ""
+    strength: Optional[str] = ""
+    dosage_form: Optional[str] = "Tablet"
     category: Optional[str] = "TABLET"
     category_name: Optional[str] = "Tablet"
     category_slug: Optional[str] = "otc-medicine"
     slug: Optional[str] = None
-    manufacturer: str = "Unknown Pharma"
+    manufacturer: Optional[str] = "Unknown Pharma"
     manufacturer_name: Optional[str] = None
     manufacturer_slug: Optional[str] = None
-    unit_price: float = 0.0
-    pack_size: str = "1 Unit"
+    unit_price: Optional[float] = 0.0
+    pack_size: Optional[str] = "1 Unit"
     unit_prices: List[UnitPriceItem] = []
     discount_type: Optional[str] = "Percentage"
-    discount_value: float = 0.0
+    discount_value: Optional[float] = 0.0
     is_discountable: bool = False
     is_available: bool = True
     rx_required: bool = False
@@ -85,8 +85,8 @@ class MedicineDetailResponse(BaseModel):
     id: Optional[str] = None
     medicine_id: Optional[str] = None
     slug: str
-    medicine_name: str
-    generic_name: str
+    medicine_name: Optional[str] = ""
+    generic_name: Optional[str] = ""
     category_name: Optional[str] = None
     category_slug: Optional[str] = None
     manufacturer_name: Optional[str] = None

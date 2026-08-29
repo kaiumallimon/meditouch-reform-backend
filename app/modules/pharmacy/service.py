@@ -39,12 +39,40 @@ class PharmacyService:
         items = []
         for d in docs:
             item_dict = dict(d)
-            if "medicine_name" not in item_dict:
-                item_dict["medicine_name"] = item_dict.get("brand", item_dict.get("name", "Unknown"))
-            if "name" not in item_dict:
-                item_dict["name"] = f"{item_dict.get('brand', '')} {item_dict.get('strength', '')}".strip()
-            if "manufacturer_name" not in item_dict:
-                item_dict["manufacturer_name"] = item_dict.get("manufacturer", "Unknown Pharma")
+            if not item_dict.get("medicine_name"):
+                item_dict["medicine_name"] = item_dict.get("brand") or item_dict.get("name") or "Unknown"
+            if not item_dict.get("name"):
+                item_dict["name"] = f"{item_dict.get('brand', '')} {item_dict.get('strength', '')}".strip() or item_dict["medicine_name"]
+            if not item_dict.get("manufacturer_name"):
+                item_dict["manufacturer_name"] = item_dict.get("manufacturer") or "Unknown Pharma"
+            if not item_dict.get("brand"):
+                item_dict["brand"] = item_dict.get("name") or item_dict.get("medicine_name") or "Unknown"
+            if item_dict.get("generic_name") is None:
+                item_dict["generic_name"] = ""
+            if item_dict.get("dosage_form") is None:
+                item_dict["dosage_form"] = "Tablet"
+            if item_dict.get("strength") is None:
+                item_dict["strength"] = ""
+            if item_dict.get("pack_size") is None:
+                item_dict["pack_size"] = "1 Unit"
+            if item_dict.get("unit_price") is None:
+                item_dict["unit_price"] = 0.0
+
+            # Sanitize unit_prices list
+            if "unit_prices" in item_dict and isinstance(item_dict["unit_prices"], list):
+                sanitized_prices = []
+                for p in item_dict["unit_prices"]:
+                    if isinstance(p, dict):
+                        sanitized_prices.append({
+                            "id": p.get("id"),
+                            "unit": p.get("unit") or "Unit",
+                            "unit_size": int(p.get("unit_size") or 1),
+                            "price": float(p.get("price") or 0.0)
+                        })
+                item_dict["unit_prices"] = sanitized_prices
+            else:
+                item_dict["unit_prices"] = []
+
             items.append(MedicineResponse(**item_dict))
 
         return PaginatedResponse.create(items=items, total=total, params=pagination)
@@ -55,21 +83,53 @@ class PharmacyService:
             doc = await self.repo.get_by_id(identifier)
         if not doc or not doc.get("is_active", True):
             raise NotFoundException(f"Medicine '{identifier}' not found")
-        
+
         item_dict = dict(doc)
-        if "medicine_name" not in item_dict:
-            item_dict["medicine_name"] = item_dict.get("brand", item_dict.get("name", "Unknown"))
-        if "name" not in item_dict:
-            item_dict["name"] = f"{item_dict.get('brand', '')} {item_dict.get('strength', '')}".strip()
-        if "manufacturer_name" not in item_dict:
-            item_dict["manufacturer_name"] = item_dict.get("manufacturer", "Unknown Pharma")
+        if not item_dict.get("medicine_name"):
+            item_dict["medicine_name"] = item_dict.get("brand") or item_dict.get("name") or "Unknown"
+        if not item_dict.get("name"):
+            item_dict["name"] = f"{item_dict.get('brand', '')} {item_dict.get('strength', '')}".strip() or item_dict["medicine_name"]
+        if not item_dict.get("manufacturer_name"):
+            item_dict["manufacturer_name"] = item_dict.get("manufacturer") or "Unknown Pharma"
+        if not item_dict.get("brand"):
+            item_dict["brand"] = item_dict.get("name") or item_dict.get("medicine_name") or "Unknown"
+        if item_dict.get("generic_name") is None:
+            item_dict["generic_name"] = ""
+        if item_dict.get("dosage_form") is None:
+            item_dict["dosage_form"] = "Tablet"
+        if item_dict.get("strength") is None:
+            item_dict["strength"] = ""
+        if item_dict.get("pack_size") is None:
+            item_dict["pack_size"] = "1 Unit"
+        if item_dict.get("unit_price") is None:
+            item_dict["unit_price"] = 0.0
+
+        if "unit_prices" in item_dict and isinstance(item_dict["unit_prices"], list):
+            sanitized_prices = []
+            for p in item_dict["unit_prices"]:
+                if isinstance(p, dict):
+                    sanitized_prices.append({
+                        "id": p.get("id"),
+                        "unit": p.get("unit") or "Unit",
+                        "unit_size": int(p.get("unit_size") or 1),
+                        "price": float(p.get("price") or 0.0)
+                    })
+            item_dict["unit_prices"] = sanitized_prices
+        else:
+            item_dict["unit_prices"] = []
+
         return MedicineResponse(**item_dict)
 
     async def get_medicine_detail(self, slug: str) -> MedicineDetailResponse:
         # First check medicine_details collection
         detail = await self.repo.get_detail_by_slug(slug)
         if detail:
-            return MedicineDetailResponse(**detail)
+            d_dict = dict(detail)
+            if not d_dict.get("generic_name"):
+                d_dict["generic_name"] = ""
+            if not d_dict.get("medicine_name"):
+                d_dict["medicine_name"] = d_dict.get("brand") or "Unknown"
+            return MedicineDetailResponse(**d_dict)
 
         # Fallback to base medicine if details not crawled yet
         med = await self.repo.get_by_slug(slug)
@@ -78,18 +138,18 @@ class PharmacyService:
         if not med:
             raise NotFoundException(f"Medicine details for '{slug}' not found")
 
-        med_name = med.get("medicine_name") or med.get("brand", "Unknown")
+        med_name = med.get("medicine_name") or med.get("brand") or "Unknown"
         return MedicineDetailResponse(
-            id=med.get("id"),
-            medicine_id=med.get("id"),
+            id=str(med.get("id", "")),
+            medicine_id=str(med.get("id", "")),
             slug=med.get("slug") or slug,
             medicine_name=med_name,
-            generic_name=med.get("generic_name", ""),
-            category_name=med.get("category_name", "Tablet"),
-            category_slug=med.get("category_slug", "otc-medicine"),
-            manufacturer_name=med.get("manufacturer_name") or med.get("manufacturer", "Unknown Pharma"),
+            generic_name=med.get("generic_name") or "",
+            category_name=med.get("category_name") or "Tablet",
+            category_slug=med.get("category_slug") or "otc-medicine",
+            manufacturer_name=med.get("manufacturer_name") or med.get("manufacturer") or "Unknown Pharma",
             meta_title=f"{med_name} - Price, Uses & Side Effects",
-            meta_description=f"Information on {med_name} ({med.get('generic_name', '')})",
+            meta_description=f"Information on {med_name} ({med.get('generic_name') or ''})",
             product_info=med,
             medicine_details={},
             related_medicines=[]
