@@ -235,6 +235,22 @@ async def test_admin_user_crud_recovery_and_stats(client, admin_auth):
     active_ids = [u["id"] for u in list_after_res.json()["data"]["items"]]
     assert user_id not in active_ids
 
+    # 8. Admin cannot self-deactivate their own logged-in account
+    admin_self_id = admin_auth["user"]["id"]
+    self_deact_res = await client.patch(
+        f"/api/v1/admin/users/{admin_self_id}",
+        json={"is_active": False},
+        headers=headers
+    )
+    assert self_deact_res.status_code == 400
+    assert "cannot deactivate your own" in self_deact_res.json()["message"]
+
+    # 9. Admin cannot self-delete their own logged-in account
+    self_del_res = await client.delete(f"/api/v1/admin/users/{admin_self_id}", headers=headers)
+    assert self_del_res.status_code == 400
+    assert "cannot delete your own" in self_del_res.json()["message"]
+
+
 
 
 
