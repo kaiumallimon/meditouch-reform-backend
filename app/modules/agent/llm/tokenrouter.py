@@ -48,11 +48,6 @@ class TokenRouterProvider(LLMProvider):
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers=self.headers,
-                json=payload,
         try:
             async with httpx.AsyncClient(timeout=45.0) as client:
                 resp = await client.post(
@@ -69,10 +64,6 @@ class TokenRouterProvider(LLMProvider):
             raise RuntimeError(
                 f"Cannot connect to LLM provider at '{self.base_url}'. Please verify your TOKENROUTER_BASE_URL (or check internet connection). Details: {e}"
             )
-            if resp.status_code != 200:
-                logger.error(f"TokenRouter API error [{resp.status_code}]: {resp.text}")
-                raise RuntimeError(f"TokenRouter API error: {resp.status_code} - {resp.text}")
-            return resp.json()
         except httpx.RequestError as e:
             logger.error(f"Request error to {self.base_url}: {e}")
             raise RuntimeError(f"LLM request error to '{self.base_url}': {e}")
