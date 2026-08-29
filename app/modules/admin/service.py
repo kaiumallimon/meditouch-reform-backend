@@ -17,6 +17,7 @@ from app.modules.admin.schemas import (
     AdminUserResponse,
     AdminUsersStats,
     AdminDashboardStats,
+    AuditStatsResponse,
     AuditLogEntry
 )
 from app.modules.doctors.schemas import DoctorProfileResponse, DoctorVerificationDocSchema
