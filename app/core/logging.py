@@ -70,6 +70,18 @@ class ConsoleColorFormatter(logging.Formatter):
             log_line += f"\n{self.formatException(record.exc_info)}"
         return log_line
 
+class SafeRotatingFileHandler(RotatingFileHandler):
+    """
+    RotatingFileHandler resilient to Windows file locking (WinError 32)
+    when running multi-process or uvicorn reload servers.
+    """
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except (PermissionError, OSError):
+            # On Windows, if another process holds the file open, continue writing safely
+            pass
+
 def setup_logging(
     log_level: int = logging.INFO,
     log_dir: str = "logs",
@@ -90,10 +102,10 @@ def setup_logging(
     else:
         console_handler.setFormatter(ConsoleColorFormatter())
 
-    # 2. Main App Log File (Rotating, max 10MB x 5 backups)
-    app_file_handler = RotatingFileHandler(
+    # 2. Main App Log File (Safe Rotating, max 50MB x 5 backups)
+    app_file_handler = SafeRotatingFileHandler(
         filename=os.path.join(log_dir, "app.log"),
-        maxBytes=10 * 1024 * 1024,
+        maxBytes=50 * 1024 * 1024,
         backupCount=5,
         encoding="utf-8"
     )
@@ -101,10 +113,10 @@ def setup_logging(
     app_file_handler.addFilter(req_filter)
     app_file_handler.setFormatter(JSONLogFormatter())
 
-    # 3. Error Log File (Rotating, max 10MB x 5 backups)
-    error_file_handler = RotatingFileHandler(
+    # 3. Error Log File (Safe Rotating, max 50MB x 5 backups)
+    error_file_handler = SafeRotatingFileHandler(
         filename=os.path.join(log_dir, "error.log"),
-        maxBytes=10 * 1024 * 1024,
+        maxBytes=50 * 1024 * 1024,
         backupCount=5,
         encoding="utf-8"
     )
@@ -125,7 +137,12 @@ def setup_logging(
     app_logger = logging.getLogger("meditouch")
     app_logger.setLevel(log_level)
 
-    # Silence overly noisy third-party loggers
+    # Silence overly noisy third-party debug loggers
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("hpack").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("motor").setLevel(logging.WARNING)
     logging.getLogger("pymongo").setLevel(logging.WARNING)
