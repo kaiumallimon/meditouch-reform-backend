@@ -145,6 +145,10 @@ async def test_crawler_sse_stream(client):
             if line.startswith("data: "):
                 import json
                 event_data = json.loads(line[6:])
+                assert event_data["type"] == "INIT"
+                assert "job" in event_data["data"]
+                break
+
 @pytest.mark.asyncio
 async def test_server_side_sorting(client):
     # Test sorting by name_asc, price_asc, created_desc
