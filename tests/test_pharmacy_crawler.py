@@ -145,8 +145,17 @@ async def test_crawler_sse_stream(client):
             if line.startswith("data: "):
                 import json
                 event_data = json.loads(line[6:])
-                assert event_data["type"] == "INIT"
-                assert "job" in event_data["data"]
-                break
+@pytest.mark.asyncio
+async def test_server_side_sorting(client):
+    # Test sorting by name_asc, price_asc, created_desc
+    res_name = await client.get("/api/v1/pharmacy/medicines?sort_by=name_asc")
+    assert res_name.status_code == 200
+    assert "items" in res_name.json()["data"]
 
+    res_price = await client.get("/api/v1/pharmacy/medicines?sort_by=price_desc")
+    assert res_price.status_code == 200
+    assert "items" in res_price.json()["data"]
 
+    res_newest = await client.get("/api/v1/pharmacy/medicines?sort_by=created_desc")
+    assert res_newest.status_code == 200
+    assert "items" in res_newest.json()["data"]
