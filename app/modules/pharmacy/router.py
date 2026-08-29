@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query, status
+from fastapi.responses import StreamingResponse
 from typing import Optional, List, Dict, Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.db.mongodb import get_db
@@ -135,8 +136,6 @@ async def stop_crawler(
         raise ForbiddenException("Only ADMIN can stop crawler execution")
     status_res = await service.stop_crawler(admin_id=payload["sub"])
     return APIResponse(success=True, message="Crawler stop requested", data=status_res)
-
-from fastapi.responses import StreamingResponse
 
 @router.get("/crawler/stream")
 async def stream_crawler_events(
