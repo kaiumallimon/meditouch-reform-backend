@@ -40,6 +40,8 @@ class CloudinaryCDNService:
     def validate_file(self, filename: str, file_bytes: bytes) -> str:
         """
         Validates file extension and size. Returns resource_type ('image' or 'raw').
+        All documents (PDF, DOC, DOCX, TXT) are designated as 'raw'.
+        All images (JPG, PNG, WEBP, GIF, SVG) are designated as 'image'.
         """
         ext = os.path.splitext(filename)[1].lower()
         if ext not in ALLOWED_ALL_EXTENSIONS:
@@ -64,14 +66,15 @@ class CloudinaryCDNService:
         tags: Optional[list[str]] = None
     ) -> Dict[str, Any]:
         """
-        Uploads a file to Cloudinary CDN with automatic folder routing and returns CDN URLs with proper file extensions.
+        Uploads a file to Cloudinary CDN with automatic folder routing.
+        Uses 'raw' resource_type for documents (.pdf, .doc, .docx, .txt) and 'image' for images.
         """
         resource_type = self.validate_file(filename, file_bytes)
         ext = os.path.splitext(filename)[1].lower().lstrip(".")
         clean_base = re.sub(r'[^a-zA-Z0-9_-]', '_', os.path.splitext(filename)[0])[:35]
         uid = uuid.uuid4().hex[:10]
 
-        # For raw files (e.g. .pdf, .doc, .docx), public_id MUST include the extension so downloads preserve the file type
+        # For raw files (e.g. .pdf, .doc, .docx), public_id MUST include the extension so downloads and CDN URLs preserve the file type
         if resource_type == "raw":
             custom_public_id = public_id or f"{clean_base}_{uid}.{ext}"
         else:
@@ -100,6 +103,8 @@ class CloudinaryCDNService:
                 "folder": folder,
                 "public_id": custom_public_id,
                 "resource_type": resource_type,
+                "type": "upload",
+                "access_mode": "public",
                 "overwrite": True,
                 "unique_filename": False,
                 "use_filename": False
@@ -114,7 +119,7 @@ class CloudinaryCDNService:
             ret_format = result.get("format") or ext
             secure_url = result.get("secure_url") or result.get("url")
 
-            # Ensure the secure_url has a file extension so browsers do not download it as generic extensionless binary
+            # For image files, ensure the secure_url has the image extension if not already present
             if res_type == "image" and ret_format and not secure_url.lower().endswith(f".{ret_format.lower()}"):
                 secure_url = f"{secure_url}.{ret_format}"
             elif res_type == "raw" and ext and not secure_url.lower().endswith(f".{ext.lower()}"):
