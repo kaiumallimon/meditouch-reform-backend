@@ -1,14 +1,20 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.modules.pharmacy.repository import PharmacyRepository
+from app.modules.pharmacy.crawler import MedEasyCrawlerManager
 from app.modules.pharmacy.schemas import (
     MedicineResponse,
     MedicineFilterParams,
     CreateMedicineRequest,
     UpdateMedicineRequest,
-    CategorySummaryResponse
+    CategorySummaryResponse,
+    MedicineDetailResponse,
+    CrawlerSettingsModel,
+    UpdateCrawlerSettingsRequest,
+    CrawlerStartRequest,
+    CrawlerJobStatusResponse,
+    PharmacyStatsResponse
 )
-from app.integrations.medicine_source.medeasy_parser import ingest_medicine_catalog
 from app.common.pagination import PaginationParams, PaginatedResponse
 from app.common.enums import AuditAction
 from app.core.exceptions import NotFoundException
@@ -18,6 +24,7 @@ class PharmacyService:
     def __init__(self, repo: PharmacyRepository, db: AsyncIOMotorDatabase):
         self.repo = repo
         self.db = db
+        self.crawler = MedEasyCrawlerManager.get_instance()
 
     async def search_catalog(
         self,
@@ -29,19 +36,151 @@ class PharmacyService:
             skip=pagination.skip,
             limit=pagination.limit
         )
-        items = [MedicineResponse(**d) for d in docs]
+        items = []
+        for d in docs:
+            item_dict = dict(d)
+            if "medicine_name" not in item_dict:
+                item_dict["medicine_name"] = item_dict.get("brand", item_dict.get("name", "Unknown"))
+            if "name" not in item_dict:
+                item_dict["name"] = f"{item_dict.get('brand', '')} {item_dict.get('strength', '')}".strip()
+            if "manufacturer_name" not in item_dict:
+                item_dict["manufacturer_name"] = item_dict.get("manufacturer", "Unknown Pharma")
+            items.append(MedicineResponse(**item_dict))
+
         return PaginatedResponse.create(items=items, total=total, params=pagination)
 
-    async def get_medicine_by_id(self, medicine_id: str) -> MedicineResponse:
-        doc = await self.repo.get_by_id(medicine_id)
+    async def get_medicine_by_id_or_slug(self, identifier: str) -> MedicineResponse:
+        doc = await self.repo.get_by_slug(identifier)
+        if not doc:
+            doc = await self.repo.get_by_id(identifier)
         if not doc or not doc.get("is_active", True):
-            raise NotFoundException("Medicine not found")
-        return MedicineResponse(**doc)
+            raise NotFoundException(f"Medicine '{identifier}' not found")
+        
+        item_dict = dict(doc)
+        if "medicine_name" not in item_dict:
+            item_dict["medicine_name"] = item_dict.get("brand", item_dict.get("name", "Unknown"))
+        if "name" not in item_dict:
+            item_dict["name"] = f"{item_dict.get('brand', '')} {item_dict.get('strength', '')}".strip()
+        if "manufacturer_name" not in item_dict:
+            item_dict["manufacturer_name"] = item_dict.get("manufacturer", "Unknown Pharma")
+        return MedicineResponse(**item_dict)
+
+    async def get_medicine_detail(self, slug: str) -> MedicineDetailResponse:
+        # First check medicine_details collection
+        detail = await self.repo.get_detail_by_slug(slug)
+        if detail:
+            return MedicineDetailResponse(**detail)
+
+        # Fallback to base medicine if details not crawled yet
+        med = await self.repo.get_by_slug(slug)
+        if not med:
+            med = await self.repo.get_by_id(slug)
+        if not med:
+            raise NotFoundException(f"Medicine details for '{slug}' not found")
+
+        med_name = med.get("medicine_name") or med.get("brand", "Unknown")
+        return MedicineDetailResponse(
+            id=med.get("id"),
+            medicine_id=med.get("id"),
+            slug=med.get("slug") or slug,
+            medicine_name=med_name,
+            generic_name=med.get("generic_name", ""),
+            category_name=med.get("category_name", "Tablet"),
+            category_slug=med.get("category_slug", "otc-medicine"),
+            manufacturer_name=med.get("manufacturer_name") or med.get("manufacturer", "Unknown Pharma"),
+            meta_title=f"{med_name} - Price, Uses & Side Effects",
+            meta_description=f"Information on {med_name} ({med.get('generic_name', '')})",
+            product_info=med,
+            medicine_details={},
+            related_medicines=[]
+        )
 
     async def get_categories_summary(self) -> List[CategorySummaryResponse]:
         summary = await self.repo.get_categories_summary()
         return [CategorySummaryResponse(**s) for s in summary]
 
+    async def get_pharmacy_stats(self) -> PharmacyStatsResponse:
+        stats = await self.repo.get_pharmacy_stats()
+        # Check live crawler status
+        crawler_status = await self.crawler.get_status(self.db)
+        if crawler_status.is_running:
+            stats["crawler_status"] = "RUNNING"
+        return PharmacyStatsResponse(**stats)
+
+    # =========================================================================
+    # Crawler Control & Configuration
+    # =========================================================================
+    async def get_crawler_settings(self) -> CrawlerSettingsModel:
+        return await self.repo.get_crawler_settings()
+
+    async def update_crawler_settings(
+        self,
+        req: UpdateCrawlerSettingsRequest,
+        admin_id: str
+    ) -> CrawlerSettingsModel:
+        updates = req.model_dump(exclude_unset=True)
+        updated = await self.repo.update_crawler_settings(updates)
+
+        await log_audit_event(
+            self.db,
+            user_id=admin_id,
+            action=AuditAction.SETTINGS_UPDATED,
+            target_type="CRAWLER_SETTINGS",
+            target_id="default_settings",
+            details={"updated_fields": list(updates.keys())}
+        )
+
+        return updated
+
+    async def start_crawler(
+        self,
+        req: CrawlerStartRequest,
+        admin_id: str
+    ) -> CrawlerJobStatusResponse:
+        settings = await self.repo.get_crawler_settings()
+        category = req.category_slug or settings.category_slug
+
+        status = await self.crawler.start_crawler(
+            db=self.db,
+            settings=settings,
+            category_slug=category,
+            start_page=req.start_page,
+            max_pages=req.max_pages or settings.max_pages,
+            admin_id=admin_id
+        )
+
+        await log_audit_event(
+            self.db,
+            user_id=admin_id,
+            action=AuditAction.MEDEASY_INGESTION_TRIGGERED,
+            target_type="CRAWLER",
+            target_id=status.job_id or "job",
+            details={"category_slug": category, "start_page": req.start_page}
+        )
+
+        return status
+
+    async def stop_crawler(self, admin_id: str) -> CrawlerJobStatusResponse:
+        status = await self.crawler.stop_crawler()
+        await log_audit_event(
+            self.db,
+            user_id=admin_id,
+            action=AuditAction.MEDICINE_UPDATED,
+            target_type="CRAWLER",
+            target_id=status.job_id or "job",
+            details={"action": "STOPPED"}
+        )
+        return status
+
+    async def get_crawler_status(self) -> CrawlerJobStatusResponse:
+        return await self.crawler.get_status(self.db)
+
+    async def get_crawler_history(self) -> List[Dict[str, Any]]:
+        return await self.repo.get_crawler_job_history(limit=10)
+
+    # =========================================================================
+    # Admin Manual CRUD
+    # =========================================================================
     async def create_medicine(self, req: CreateMedicineRequest, admin_id: Optional[str] = None) -> MedicineResponse:
         doc = req.model_dump()
         doc["category"] = req.category.value if hasattr(req.category, "value") else req.category
@@ -74,17 +213,3 @@ class PharmacyService:
         )
 
         return MedicineResponse(**updated)
-
-    async def trigger_medeasy_ingestion(self, admin_id: Optional[str] = None) -> int:
-        count = await ingest_medicine_catalog(self.db)
-
-        await log_audit_event(
-            self.db,
-            user_id=admin_id,
-            action=AuditAction.MEDEASY_INGESTION_TRIGGERED,
-            target_type="CATALOG",
-            target_id="medeasy",
-            details={"ingested_count": count}
-        )
-
-        return count

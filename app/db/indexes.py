@@ -33,15 +33,26 @@ async def create_db_indexes(db: AsyncIOMotorDatabase) -> None:
             IndexModel([("start_time", ASCENDING)], name="idx_appointments_start_time"),
         ])
         await db.medicines.create_indexes([
+            IndexModel([("slug", ASCENDING)], unique=True, sparse=True, name="idx_medicines_slug_unique"),
             IndexModel(
-                [("name", TEXT), ("generic_name", TEXT), ("brand", TEXT), ("manufacturer", TEXT)],
+                [("name", TEXT), ("generic_name", TEXT), ("brand", TEXT), ("manufacturer", TEXT), ("medicine_name", TEXT)],
                 name="idx_medicines_text_search"
             ),
             IndexModel([("category", ASCENDING)], name="idx_medicines_category"),
+            IndexModel([("category_slug", ASCENDING)], name="idx_medicines_category_slug"),
             IndexModel([("is_active", ASCENDING)], name="idx_medicines_active"),
             IndexModel([("in_stock", ASCENDING)], name="idx_medicines_in_stock"),
             IndexModel([("generic_name", ASCENDING)], name="idx_medicines_generic"),
             IndexModel([("brand", ASCENDING), ("strength", ASCENDING)], name="idx_medicines_brand_strength"),
+        ])
+        await db.medicine_details.create_indexes([
+            IndexModel([("slug", ASCENDING)], unique=True, name="idx_medicine_details_slug_unique"),
+            IndexModel([("medicine_id", ASCENDING)], name="idx_medicine_details_med_id"),
+            IndexModel([("generic_name", ASCENDING)], name="idx_medicine_details_generic"),
+        ])
+        await db.crawler_jobs.create_indexes([
+            IndexModel([("started_at", DESCENDING)], name="idx_crawler_jobs_started_at"),
+            IndexModel([("status", ASCENDING)], name="idx_crawler_jobs_status"),
         ])
         await db.carts.create_indexes([
             IndexModel([("user_id", ASCENDING)], unique=True, name="idx_carts_user_id_unique"),

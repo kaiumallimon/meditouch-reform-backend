@@ -3,7 +3,10 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from datetime import datetime, timezone
 import uuid
 import re
-from app.modules.pharmacy.schemas import MedicineFilterParams
+from app.modules.pharmacy.schemas import (
+    MedicineFilterParams,
+    CrawlerSettingsModel
+)
 
 class PharmacyRepository:
     def __init__(self, db: AsyncIOMotorDatabase):
@@ -11,6 +14,12 @@ class PharmacyRepository:
 
     async def get_by_id(self, medicine_id: str) -> Optional[Dict[str, Any]]:
         return await self.db.medicines.find_one({"id": medicine_id})
+
+    async def get_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
+        return await self.db.medicines.find_one({"slug": slug})
+
+    async def get_detail_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
+        return await self.db.medicine_details.find_one({"slug": slug})
 
     async def search_medicines(
         self,
@@ -21,26 +30,41 @@ class PharmacyRepository:
         query: Dict[str, Any] = {"is_active": True}
 
         if filters.search:
-            search_regex = {"$regex": re.escape(filters.search), "$options": "i"}
+            search_regex = {"$regex": re.escape(filters.search.strip()), "$options": "i"}
             query["$or"] = [
                 {"name": search_regex},
+                {"medicine_name": search_regex},
                 {"brand": search_regex},
                 {"generic_name": search_regex},
-                {"manufacturer": search_regex}
+                {"manufacturer": search_regex},
+                {"manufacturer_name": search_regex},
+                {"category_name": search_regex},
+                {"slug": search_regex}
             ]
 
         if filters.generic_name:
             query["generic_name"] = {"$regex": f"^{re.escape(filters.generic_name)}$", "$options": "i"}
 
-        if filters.category:
-            query["category"] = filters.category.value if hasattr(filters.category, "value") else filters.category
+        if filters.category_slug:
+            query["category_slug"] = filters.category_slug
+        elif filters.category_name:
+            query["category_name"] = {"$regex": f"^{re.escape(filters.category_name)}$", "$options": "i"}
+        elif filters.category:
+            cat_val = filters.category.value if hasattr(filters.category, "value") else str(filters.category)
+            query["$or"] = [
+                {"category": cat_val.upper()},
+                {"category_name": {"$regex": f"^{re.escape(cat_val)}$", "$options": "i"}},
+                {"category_slug": cat_val.lower()}
+            ]
 
         if filters.requires_prescription is not None:
-            query["requires_prescription"] = filters.requires_prescription
+            query["$or"] = [
+                {"rx_required": filters.requires_prescription},
+                {"requires_prescription": filters.requires_prescription}
+            ]
 
         if filters.in_stock_only is True:
             query["in_stock"] = True
-            query["stock_count"] = {"$gt": 0}
 
         if filters.min_price is not None or filters.max_price is not None:
             price_query = {}
@@ -51,17 +75,21 @@ class PharmacyRepository:
             query["unit_price"] = price_query
 
         if filters.manufacturer:
-            query["manufacturer"] = {"$regex": re.escape(filters.manufacturer), "$options": "i"}
+            m_regex = {"$regex": re.escape(filters.manufacturer), "$options": "i"}
+            query["$or"] = [{"manufacturer": m_regex}, {"manufacturer_name": m_regex}]
 
         total = await self.db.medicines.count_documents(query)
-        cursor = self.db.medicines.find(query).skip(skip).limit(limit).sort("brand", 1)
+        cursor = self.db.medicines.find(query).skip(skip).limit(limit).sort([("medicine_name", 1), ("brand", 1)])
         items = await cursor.to_list(length=limit)
         return items, total
 
     async def create_medicine(self, medicine_doc: Dict[str, Any]) -> Dict[str, Any]:
         if "id" not in medicine_doc:
             medicine_doc["id"] = str(uuid.uuid4())
-        medicine_doc["name"] = f"{medicine_doc.get('brand', '')} {medicine_doc.get('strength', '')}".strip()
+        brand = medicine_doc.get("brand") or medicine_doc.get("medicine_name", "")
+        strength = medicine_doc.get("strength", "")
+        medicine_doc["name"] = f"{brand} {strength}".strip()
+        medicine_doc["medicine_name"] = brand
         medicine_doc["in_stock"] = medicine_doc.get("stock_count", 0) > 0
         medicine_doc["is_active"] = True
         medicine_doc["created_at"] = datetime.now(timezone.utc)
@@ -82,9 +110,64 @@ class PharmacyRepository:
     async def get_categories_summary(self) -> List[Dict[str, Any]]:
         pipeline = [
             {"$match": {"is_active": True}},
-            {"$group": {"_id": "$category", "count": {"$sum": 1}}},
+            {
+                "$group": {
+                    "_id": {
+                        "$ifNull": ["$category_name", "$category"]
+                    },
+                    "count": {"$sum": 1}
+                }
+            },
             {"$sort": {"count": -1}}
         ]
         res = await self.db.medicines.aggregate(pipeline).to_list(length=50)
-        return [{"category": r["_id"], "count": r["count"]} for r in res if r.get("_id")]
+        return [{"category": str(r["_id"]), "count": r["count"]} for r in res if r.get("_id")]
 
+    async def get_pharmacy_stats(self) -> Dict[str, Any]:
+        total_medicines = await self.db.medicines.count_documents({"is_active": True})
+        in_stock_medicines = await self.db.medicines.count_documents({"is_active": True, "in_stock": True})
+        
+        cats = await self.db.medicines.distinct("category_name", {"is_active": True})
+        total_categories = len(cats) if cats else len(await self.db.medicines.distinct("category", {"is_active": True}))
+
+        manufs = await self.db.medicines.distinct("manufacturer_name", {"is_active": True})
+        total_manufacturers = len(manufs) if manufs else len(await self.db.medicines.distinct("manufacturer", {"is_active": True}))
+
+        latest_job = await self.db.crawler_jobs.find_one(sort=[("started_at", -1)])
+        last_crawled_at = latest_job.get("started_at") if latest_job else None
+        crawler_status = latest_job.get("status") if latest_job else "IDLE"
+
+        return {
+            "total_medicines": total_medicines,
+            "in_stock_medicines": in_stock_medicines,
+            "total_categories": total_categories,
+            "total_manufacturers": total_manufacturers,
+            "last_crawled_at": last_crawled_at,
+            "crawler_status": crawler_status
+        }
+
+    # Crawler Settings DB Methods
+    async def get_crawler_settings(self) -> CrawlerSettingsModel:
+        doc = await self.db.crawler_settings.find_one({"id": "default_settings"})
+        if not doc:
+            defaults = CrawlerSettingsModel()
+            doc_dict = defaults.model_dump()
+            doc_dict["id"] = "default_settings"
+            doc_dict["updated_at"] = datetime.now(timezone.utc)
+            await self.db.crawler_settings.insert_one(doc_dict)
+            return defaults
+        return CrawlerSettingsModel(**doc)
+
+    async def update_crawler_settings(self, updates: Dict[str, Any]) -> CrawlerSettingsModel:
+        updates["updated_at"] = datetime.now(timezone.utc)
+        updated = await self.db.crawler_settings.find_one_and_update(
+            {"id": "default_settings"},
+            {"$set": updates},
+            upsert=True,
+            return_document=True
+        )
+        return CrawlerSettingsModel(**updated)
+
+    async def get_crawler_job_history(self, limit: int = 10) -> List[Dict[str, Any]]:
+        cursor = self.db.crawler_jobs.find().sort("started_at", -1).limit(limit)
+        return await cursor.to_list(length=limit)
