@@ -78,8 +78,25 @@ class PharmacyRepository:
             m_regex = {"$regex": re.escape(filters.manufacturer), "$options": "i"}
             query["$or"] = [{"manufacturer": m_regex}, {"manufacturer_name": m_regex}]
 
+        # Dynamic Server-side Sorting
+        sort_criteria = [("medicine_name", 1), ("brand", 1)]
+        if filters.sort_by == "name_desc":
+            sort_criteria = [("medicine_name", -1), ("brand", -1)]
+        elif filters.sort_by == "price_asc":
+            sort_criteria = [("unit_price", 1), ("medicine_name", 1)]
+        elif filters.sort_by == "price_desc":
+            sort_criteria = [("unit_price", -1), ("medicine_name", 1)]
+        elif filters.sort_by == "created_desc":
+            sort_criteria = [("created_at", -1)]
+        elif filters.sort_by == "created_asc":
+            sort_criteria = [("created_at", 1)]
+        elif filters.sort_by == "manufacturer_asc":
+            sort_criteria = [("manufacturer_name", 1), ("medicine_name", 1)]
+        elif filters.sort_by == "manufacturer_desc":
+            sort_criteria = [("manufacturer_name", -1), ("medicine_name", 1)]
+
         total = await self.db.medicines.count_documents(query)
-        cursor = self.db.medicines.find(query).skip(skip).limit(limit).sort([("medicine_name", 1), ("brand", 1)])
+        cursor = self.db.medicines.find(query).skip(skip).limit(limit).sort(sort_criteria)
         items = await cursor.to_list(length=limit)
         return items, total
 

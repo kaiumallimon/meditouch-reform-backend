@@ -54,6 +54,7 @@ class MedicineFilterParams(BaseModel):
     min_price: Optional[float] = None
     max_price: Optional[float] = None
     manufacturer: Optional[str] = None
+    sort_by: Optional[str] = "name_asc"
 
 class CreateMedicineRequest(BaseModel):
     brand: str = Field(..., min_length=1)

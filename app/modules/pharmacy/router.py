@@ -45,6 +45,7 @@ async def search_medicines(
     min_price: Optional[float] = Query(None),
     max_price: Optional[float] = Query(None),
     manufacturer: Optional[str] = Query(None),
+    sort_by: Optional[str] = Query("name_asc"),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     service: PharmacyService = Depends(get_pharmacy_service)
@@ -59,7 +60,8 @@ async def search_medicines(
         in_stock_only=in_stock_only,
         min_price=min_price,
         max_price=max_price,
-        manufacturer=manufacturer
+        manufacturer=manufacturer,
+        sort_by=sort_by
     )
     pagination = PaginationParams(page=page, limit=limit)
     res = await service.search_catalog(filters, pagination)
