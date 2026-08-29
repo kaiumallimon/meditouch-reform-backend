@@ -60,6 +60,31 @@ async def test_upload_invalid_extension_rejected(client, patient_auth):
     assert "not supported" in res.json()["message"]
 
 @pytest.mark.asyncio
+async def test_upload_oversized_image_rejected(client, patient_auth):
+    headers = patient_auth["headers"]
+
+    # 5. Oversized image > 500 KB
+    large_image = b"X" * (501 * 1024)
+    files = {"file": ("large_avatar.png", io.BytesIO(large_image), "image/png")}
+
+    res = await client.post("/api/v1/media/avatar", files=files, headers=headers)
+    assert res.status_code == 400
+    assert "cannot exceed 500 KB" in res.json()["message"]
+
+@pytest.mark.asyncio
+async def test_upload_oversized_document_rejected(client, admin_auth):
+    headers = admin_auth["headers"]
+
+    # 6. Oversized document > 1 MB
+    large_doc = b"X" * (1024 * 1024 + 100)
+    files = {"file": ("large_doc.pdf", io.BytesIO(large_doc), "application/pdf")}
+
+    res = await client.post("/api/v1/media/doctor-document", files=files, headers=headers)
+    assert res.status_code == 400
+    assert "cannot exceed 1 MB" in res.json()["message"]
+
+
+@pytest.mark.asyncio
 async def test_cdn_assets_management_read_write_delete(client, admin_auth):
     headers = admin_auth["headers"]
 
