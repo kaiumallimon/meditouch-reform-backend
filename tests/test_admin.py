@@ -256,8 +256,8 @@ async def test_admin_user_crud_recovery_and_stats(client, admin_auth):
         "/api/v1/admin/users",
         json={
             "name": "Recreated User Account",
-            "phone": "01799887766",
-            "email": "mod_super@meditouch.com",
+            "phone": "01811223399",
+            "email": "mod@meditouch.com",
             "role": "ADMIN",
             "is_active": True
         },
@@ -265,8 +265,8 @@ async def test_admin_user_crud_recovery_and_stats(client, admin_auth):
     )
     assert recreate_res.status_code == 201
     new_user_data = recreate_res.json()["data"]
-    assert new_user_data["phone"] == "01799887766"
-    assert new_user_data["email"] == "mod_super@meditouch.com"
+    assert new_user_data["phone"] == "+8801811223399"
+    assert new_user_data["email"] == "mod@meditouch.com"
     assert new_user_data["id"] != user_id
 
 
