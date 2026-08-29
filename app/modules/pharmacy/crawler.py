@@ -1,8 +1,9 @@
 import asyncio
+import json
 import uuid
 import httpx
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Set, AsyncGenerator
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.modules.pharmacy.schemas import CrawlerSettingsModel, CrawlerJobStatusResponse
 from app.core.logging import logger
@@ -26,12 +27,26 @@ class MedEasyCrawlerManager:
         self._cancel_event = asyncio.Event()
         self._task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
+        self._subscribers: Set[asyncio.Queue] = set()
 
     @classmethod
     def get_instance(cls) -> "MedEasyCrawlerManager":
         if cls._instance is None:
             cls._instance = MedEasyCrawlerManager()
         return cls._instance
+
+    def broadcast_event(self, event_type: str, data: Dict[str, Any]):
+        """Broadcast a real-time event to all connected SSE clients."""
+        payload = {
+            "type": event_type,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "data": data,
+        }
+        for q in list(self._subscribers):
+            try:
+                q.put_nowait(payload)
+            except (asyncio.QueueFull, Exception):
+                pass
 
     def _append_log(self, msg: str):
         timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
@@ -40,6 +55,44 @@ class MedEasyCrawlerManager:
         if len(self.current_job.logs) > 100:
             self.current_job.logs = self.current_job.logs[-100:]
         logger.info(f"[Crawler] {msg}")
+
+        # Broadcast real-time log event to SSE subscribers
+        self.broadcast_event("LOG", {
+            "log": log_entry,
+            "job_id": self.current_job.job_id,
+            "status": self.current_job.status
+        })
+
+    async def subscribe_stream(self) -> AsyncGenerator[str, None]:
+        """Async generator yielding SSE formatted events for connected clients."""
+        queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+        self._subscribers.add(queue)
+
+        # 1. Send initial state snapshot immediately
+        init_payload = {
+            "type": "INIT",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "data": {
+                "job": self.current_job.model_dump(mode="json"),
+                "is_running": self.current_job.is_running,
+                "status": self.current_job.status,
+            }
+        }
+        yield f"data: {json.dumps(init_payload)}\n\n"
+
+        try:
+            while True:
+                try:
+                    # Wait for next event or send keepalive ping after 12s
+                    event = await asyncio.wait_for(queue.get(), timeout=12.0)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    # SSE Keep-Alive comment to maintain active HTTP stream
+                    yield ": keep-alive\n\n"
+        except (asyncio.CancelledError, GeneratorExit):
+            pass
+        finally:
+            self._subscribers.discard(queue)
 
     async def get_status(self, db: AsyncIOMotorDatabase) -> CrawlerJobStatusResponse:
         return self.current_job
@@ -50,6 +103,10 @@ class MedEasyCrawlerManager:
                 self._cancel_event.set()
                 self._append_log("Crawler stop request initiated by admin.")
                 self.current_job.status = "STOPPING"
+                self.broadcast_event("STOPPING", {
+                    "job_id": self.current_job.job_id,
+                    "status": "STOPPING"
+                })
             return self.current_job
 
     async def start_crawler(
@@ -83,7 +140,15 @@ class MedEasyCrawlerManager:
             )
             self._append_log(f"Crawler started for category: {category_slug} (Page {start_page})")
 
-            # Spawn background async crawler task
+            self.broadcast_event("CRAWL_STARTED", {
+                "job_id": job_id,
+                "category_slug": category_slug,
+                "start_page": start_page,
+                "max_pages": max_pages,
+                "status": "RUNNING"
+            })
+
+            # Spawn decoupled background async task on server loop
             self._task = asyncio.create_task(
                 self._run_crawler_task(
                     db=db,
@@ -135,6 +200,11 @@ class MedEasyCrawlerManager:
                         self.current_job.status = "STOPPED"
                         self.current_job.is_running = False
                         self._append_log("Crawler execution stopped as requested.")
+                        self.broadcast_event("STOPPED", {
+                            "job_id": job_id,
+                            "inserted_count": self.current_job.inserted_count,
+                            "skipped_count": self.current_job.skipped_count,
+                        })
                         break
 
                     self.current_job.current_page = page
@@ -162,6 +232,15 @@ class MedEasyCrawlerManager:
                     self.current_job.total_pages = total_pages
                     self.current_job.total_products_found = product_count
 
+                    self.broadcast_event("PAGE_STARTED", {
+                        "current_page": page,
+                        "total_pages": total_pages,
+                        "total_products_found": product_count,
+                        "page_items_count": len(products),
+                        "inserted_count": self.current_job.inserted_count,
+                        "skipped_count": self.current_job.skipped_count,
+                    })
+
                     self._append_log(f"Page {page}/{total_pages}: Processing {len(products)} products...")
 
                     for prod in products:
@@ -179,6 +258,12 @@ class MedEasyCrawlerManager:
                         if existing:
                             self.current_job.skipped_count += 1
                             self._append_log(f"Skipped existing: {med_name} ({slug})")
+                            self.broadcast_event("MEDICINE_SKIPPED", {
+                                "slug": slug,
+                                "medicine_name": med_name,
+                                "skipped_count": self.current_job.skipped_count,
+                                "inserted_count": self.current_job.inserted_count,
+                            })
                             continue
 
                         # Resolve full image URL
@@ -300,6 +385,33 @@ class MedEasyCrawlerManager:
                         self.current_job.inserted_count += 1
                         self._append_log(f"Inserted: {med_name} ({slug}) with full details")
 
+                        # Broadcast real-time SSE MEDICINE_INSERTED event
+                        self.broadcast_event("MEDICINE_INSERTED", {
+                            "medicine": {
+                                "id": medicine_id,
+                                "medicine_name": med_name,
+                                "brand": med_name,
+                                "generic_name": prod.get("generic_name", ""),
+                                "strength": prod.get("strength", ""),
+                                "dosage_form": prod.get("category_name", "Tablet"),
+                                "category_name": prod.get("category_name", "Tablet"),
+                                "category_slug": category_slug,
+                                "slug": slug,
+                                "manufacturer_name": prod.get("manufacturer_name", "Unknown Pharma"),
+                                "unit_price": default_price,
+                                "pack_size": default_pack,
+                                "unit_prices": unit_prices,
+                                "rx_required": bool(prod.get("rx_required", False)),
+                                "medicine_image": full_img,
+                                "in_stock": True,
+                                "stock_count": 100,
+                            },
+                            "inserted_count": self.current_job.inserted_count,
+                            "skipped_count": self.current_job.skipped_count,
+                            "current_page": page,
+                            "total_pages": total_pages,
+                        })
+
                         # Rate limiting delay between medicine detail requests
                         if settings.rate_limit_delay_seconds > 0:
                             await asyncio.sleep(settings.rate_limit_delay_seconds)
@@ -323,6 +435,13 @@ class MedEasyCrawlerManager:
                     f"Crawl completed! Inserted: {self.current_job.inserted_count}, "
                     f"Skipped: {self.current_job.skipped_count}, Failed: {self.current_job.failed_count}"
                 )
+                self.broadcast_event("COMPLETED", {
+                    "job_id": job_id,
+                    "inserted_count": self.current_job.inserted_count,
+                    "skipped_count": self.current_job.skipped_count,
+                    "failed_count": self.current_job.failed_count,
+                    "total_pages": self.current_job.total_pages,
+                })
 
         except Exception as e:
             self.current_job.status = "FAILED"
@@ -330,6 +449,10 @@ class MedEasyCrawlerManager:
             self.current_job.failed_count += 1
             self._append_log(f"Crawler failed with unhandled error: {str(e)}")
             logger.error(f"Crawler failed: {e}", exc_info=True)
+            self.broadcast_event("FAILED", {
+                "job_id": job_id,
+                "error": str(e),
+            })
 
         finally:
             self.current_job.finished_at = datetime.now(timezone.utc)
@@ -352,4 +475,3 @@ class MedEasyCrawlerManager:
                     }
                 }
             )
-

@@ -134,3 +134,19 @@ async def test_medicine_details_and_idempotency(client, admin_auth, mock_db):
     assert stats_data["total_categories"] >= 1
     assert stats_data["total_manufacturers"] >= 1
 
+@pytest.mark.asyncio
+async def test_crawler_sse_stream(client):
+    # Connect to SSE endpoint using streaming GET
+    async with client.stream("GET", "/api/v1/pharmacy/crawler/stream") as response:
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers.get("content-type", "")
+        # Read the first event chunk (INIT event)
+        async for line in response.aiter_lines():
+            if line.startswith("data: "):
+                import json
+                event_data = json.loads(line[6:])
+                assert event_data["type"] == "INIT"
+                assert "job" in event_data["data"]
+                break
+
+

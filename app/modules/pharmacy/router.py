@@ -136,6 +136,24 @@ async def stop_crawler(
     status_res = await service.stop_crawler(admin_id=payload["sub"])
     return APIResponse(success=True, message="Crawler stop requested", data=status_res)
 
+from fastapi.responses import StreamingResponse
+
+@router.get("/crawler/stream")
+async def stream_crawler_events(
+    service: PharmacyService = Depends(get_pharmacy_service)
+):
+    """Real-time SSE event stream for live crawling progress, item injection, and logs."""
+    generator = await service.get_crawler_stream()
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
 @router.get("/crawler/status", response_model=APIResponse[CrawlerJobStatusResponse])
 async def get_crawler_status(
     service: PharmacyService = Depends(get_pharmacy_service)

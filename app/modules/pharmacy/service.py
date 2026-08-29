@@ -175,6 +175,9 @@ class PharmacyService:
     async def get_crawler_status(self) -> CrawlerJobStatusResponse:
         return await self.crawler.get_status(self.db)
 
+    async def get_crawler_stream(self):
+        return self.crawler.subscribe_stream()
+
     async def get_crawler_history(self) -> List[Dict[str, Any]]:
         return await self.repo.get_crawler_job_history(limit=10)
 
