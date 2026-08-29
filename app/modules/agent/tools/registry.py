@@ -4,7 +4,7 @@ from app.modules.agent.tools.base import BaseTool
 from app.modules.agent.tools.user.medicines import SearchMedicinesTool, GetMedicineDetailsTool, CheckMedicineStockTool
 from app.modules.agent.tools.user.clinical import SuggestMedicinesForSymptomsTool
 from app.modules.agent.tools.user.doctors import SearchDoctorsTool, GetDoctorDetailsTool
-from app.modules.agent.tools.admin.users import CreateUserTool, DeactivateUserTool, DeleteUserTool
+from app.modules.agent.tools.admin.users import SearchUsersTool, CreateUserTool, DeactivateUserTool, DeleteUserTool
 from app.modules.agent.tools.admin.cdn import GetCDNStorageStatsTool
 from app.common.enums import UserRole
 
@@ -28,7 +28,8 @@ class ToolRegistry:
         self.register(SearchDoctorsTool(self.db))
         self.register(GetDoctorDetailsTool(self.db))
 
-        # Admin / Write Tools
+        # Admin Tools
+        self.register(SearchUsersTool(self.db))
         self.register(CreateUserTool(self.db))
         self.register(DeactivateUserTool(self.db))
         self.register(DeleteUserTool(self.db))

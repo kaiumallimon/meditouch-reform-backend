@@ -31,10 +31,41 @@ def test_tool_registry_rbac_matrix():
     admin_tool_names = {t.name for t in admin_tools}
 
     assert "search_medicines" in admin_tool_names
+    assert "search_users" in admin_tool_names
     assert "create_user" in admin_tool_names
     assert "deactivate_user" in admin_tool_names
     assert "delete_user" in admin_tool_names
     assert "get_cdn_storage_stats" in admin_tool_names
+
+@pytest.mark.asyncio
+async def test_search_users_tool():
+    mock_db = MagicMock()
+    mock_db.users.find_one = AsyncMock(return_value={
+        "id": "usr_kali_123",
+        "name": "Kaium Limon",
+        "phone": "+8801711223344",
+        "email": "kalimon291@gmail.com",
+        "role": "ADMIN",
+        "is_active": True,
+        "gender": "male",
+        "created_at": "2026-08-30",
+    })
+
+    from app.modules.agent.tools.admin.users import SearchUsersTool
+    tool = SearchUsersTool(mock_db)
+
+    # Search by email
+    res = await tool.execute(
+        arguments={"query": "kalimon291@gmail.com"},
+        caller_id="usr_admin_1",
+        caller_role=UserRole.ADMIN.value,
+        session_id="ses_search",
+    )
+
+    assert res.status == ToolExecutionStatus.SUCCESS
+    assert res.result["total"] == 1
+    assert res.result["users"][0]["email"] == "kalimon291@gmail.com"
+    assert res.result["users"][0]["name"] == "Kaium Limon"
 
 def test_pydantic_command_object_validation():
     # Valid command

@@ -12,6 +12,120 @@ from app.modules.admin.service import AdminService
 from app.modules.admin.schemas import AdminCreateUserRequest, AdminUpdateUserRequest
 from app.common.enums import UserRole
 
+class SearchUsersTool(BaseTool):
+    name = "search_users"
+    description = "Searches for user accounts by email, name, phone number, role, or ID in the database. Returns sanitized user profiles."
+    roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_destructive = False
+    parameters = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search term: email address, full name, phone number, or account ID",
+            },
+            "role": {
+                "type": "string",
+                "enum": ["USER", "DOCTOR", "NURSE", "ADMIN", "DEVELOPER"],
+                "description": "Optional filter by user role",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum number of results to return (default: 5)",
+                "default": 5,
+            },
+        },
+        "required": ["query"],
+    }
+
+    def __init__(self, db: AsyncIOMotorDatabase):
+        self.db = db
+        self.resolver = EntityResolver(db)
+        self.admin_repo = AdminRepository(db)
+
+    async def execute(
+        self,
+        arguments: Dict[str, Any],
+        caller_id: str,
+        caller_role: str,
+        session_id: str,
+        confirmation_token: Optional[str] = None,
+    ) -> ToolResult:
+        if not self.is_authorized(caller_role):
+            return ToolResult(
+                tool_call_id="",
+                name=self.name,
+                status=ToolExecutionStatus.PERMISSION_DENIED,
+                result=None,
+                error_message="Admin privileges required",
+            )
+
+        query = arguments.get("query", "").strip()
+        role = arguments.get("role")
+        limit = min(int(arguments.get("limit", 5)), 20)
+
+        # 1. Try exact resolution first
+        if query:
+            res = await self.resolver.resolve_user(query)
+            if res["status"] == "EXACT_MATCH":
+                u = res["match"]
+                sanitized = {
+                    "id": u.get("id"),
+                    "name": u.get("name"),
+                    "email": u.get("email"),
+                    "phone": u.get("phone"),
+                    "role": u.get("role"),
+                    "is_active": u.get("is_active", True),
+                    "gender": u.get("gender"),
+                    "address": u.get("address"),
+                    "created_at": str(u.get("created_at")),
+                }
+                return ToolResult(
+                    tool_call_id="",
+                    name=self.name,
+                    status=ToolExecutionStatus.SUCCESS,
+                    result={"users": [sanitized], "total": 1, "query": query},
+                    metadata={"action": "SEARCH_USERS", "matches": 1},
+                )
+            elif res["status"] == "AMBIGUOUS":
+                return ToolResult(
+                    tool_call_id="",
+                    name=self.name,
+                    status=ToolExecutionStatus.SUCCESS,
+                    result={"users": res["candidates"], "total": len(res["candidates"]), "message": "Multiple matches found"},
+                    metadata={"action": "SEARCH_USERS", "matches": len(res["candidates"])},
+                )
+
+        # 2. General search via admin repository
+        users, total = await self.admin_repo.get_all_users_admin(
+            search=query if query else None,
+            role=role,
+            limit=limit,
+        )
+
+        sanitized_list = [
+            {
+                "id": u.get("id"),
+                "name": u.get("name"),
+                "email": u.get("email"),
+                "phone": u.get("phone"),
+                "role": u.get("role"),
+                "is_active": u.get("is_active", True),
+                "gender": u.get("gender"),
+                "address": u.get("address"),
+                "created_at": str(u.get("created_at")),
+            }
+            for u in users
+        ]
+
+        return ToolResult(
+            tool_call_id="",
+            name=self.name,
+            status=ToolExecutionStatus.SUCCESS,
+            result={"users": sanitized_list, "total": total, "query": query},
+            metadata={"action": "SEARCH_USERS", "matches": len(sanitized_list)},
+        )
+
 class CreateUserTool(BaseTool):
     name = "create_user"
     description = "Creates a new user account with auto-generated secure password and sends email."
