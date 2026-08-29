@@ -204,6 +204,7 @@ class AdminRepository:
         total_doctors = await self.db.users.count_documents({**filter_base, "role": "DOCTOR"})
         total_nurses = await self.db.users.count_documents({**filter_base, "role": "NURSE"})
         total_admins = await self.db.users.count_documents({**filter_base, "role": "ADMIN"})
+        total_developers = await self.db.users.count_documents({**filter_base, "role": "DEVELOPER"})
 
         return {
             "total_users": total_users,
@@ -211,7 +212,8 @@ class AdminRepository:
             "total_regular_users": total_regular_users,
             "total_doctors": total_doctors,
             "total_nurses": total_nurses,
-            "total_admins": total_admins
+            "total_admins": total_admins,
+            "total_developers": total_developers
         }
 
     async def get_dashboard_stats(self) -> Dict[str, Any]:

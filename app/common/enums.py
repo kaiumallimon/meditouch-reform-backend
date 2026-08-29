@@ -5,6 +5,7 @@ class UserRole(str, Enum):
     DOCTOR = "DOCTOR"
     NURSE = "NURSE"
     ADMIN = "ADMIN"
+    DEVELOPER = "DEVELOPER"
 
 class DoctorVerificationStatus(str, Enum):
     PENDING = "PENDING"

@@ -39,6 +39,12 @@ def require_admin_role(payload: dict = Depends(get_current_user_payload)) -> dic
         raise ForbiddenException("Access restricted to platform administrators only")
     return payload
 
+def require_admin_or_developer_role(payload: dict = Depends(get_current_user_payload)) -> dict:
+    role = payload.get("role")
+    if role not in [UserRole.ADMIN.value, UserRole.DEVELOPER.value]:
+        raise ForbiddenException("Access restricted to platform administrators and developers only")
+    return payload
+
 # =========================================================================
 # User Management Endpoints
 # =========================================================================
@@ -58,7 +64,7 @@ async def list_users(
     search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
-    payload: dict = Depends(require_admin_role),
+    payload: dict = Depends(require_admin_or_developer_role),
     service: AdminService = Depends(get_admin_service)
 ):
     pagination = PaginationParams(page=page, limit=limit)
@@ -67,7 +73,7 @@ async def list_users(
 
 @router.get("/users/stats", response_model=APIResponse[AdminUsersStats])
 async def get_users_stats(
-    payload: dict = Depends(require_admin_role),
+    payload: dict = Depends(require_admin_or_developer_role),
     service: AdminService = Depends(get_admin_service)
 ):
     stats = await service.get_users_stats()
@@ -76,7 +82,7 @@ async def get_users_stats(
 @router.get("/users/{user_id}", response_model=APIResponse[AdminUserResponse])
 async def get_user_by_id(
     user_id: str,
-    payload: dict = Depends(require_admin_role),
+    payload: dict = Depends(require_admin_or_developer_role),
     service: AdminService = Depends(get_admin_service)
 ):
     user = await service.get_user_by_id(user_id)
@@ -190,7 +196,7 @@ async def update_doctor_active_status(
 # =========================================================================
 @router.get("/dashboard/stats", response_model=APIResponse[AdminDashboardStats])
 async def get_dashboard_stats(
-    payload: dict = Depends(require_admin_role),
+    payload: dict = Depends(require_admin_or_developer_role),
     service: AdminService = Depends(get_admin_service)
 ):
     stats = await service.get_dashboard_stats()
@@ -198,7 +204,7 @@ async def get_dashboard_stats(
 
 @router.get("/audit-logs/stats", response_model=APIResponse[AuditStatsResponse])
 async def get_audit_stats(
-    payload: dict = Depends(require_admin_role),
+    payload: dict = Depends(require_admin_or_developer_role),
     service: AdminService = Depends(get_admin_service)
 ):
     stats = await service.get_audit_stats()
@@ -213,7 +219,7 @@ async def get_audit_logs(
     target_type: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
     sort_by: Optional[str] = Query("created_desc"),
-    payload: dict = Depends(require_admin_role),
+    payload: dict = Depends(require_admin_or_developer_role),
     service: AdminService = Depends(get_admin_service)
 ):
     pagination = PaginationParams(page=page, limit=limit)
