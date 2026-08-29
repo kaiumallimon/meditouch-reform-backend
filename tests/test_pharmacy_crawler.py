@@ -48,17 +48,17 @@ async def test_crawler_settings_and_status(client, admin_auth):
     assert "status" in status_data
 
 @pytest.mark.asyncio
-async def test_medicine_details_and_idempotency(client, admin_auth, db):
+async def test_medicine_details_and_idempotency(client, admin_auth, mock_db):
     headers = admin_auth["headers"]
 
     # 1. Create a medicine directly in database with rich details
     slug = "coralcal-d-tablet"
     med_id = "test-coralcal-uuid"
 
-    await db.medicines.delete_many({"slug": slug})
-    await db.medicine_details.delete_many({"slug": slug})
+    await mock_db.medicines.delete_many({"slug": slug})
+    await mock_db.medicine_details.delete_many({"slug": slug})
 
-    await db.medicines.insert_one({
+    await mock_db.medicines.insert_one({
         "id": med_id,
         "medeasy_id": 4087,
         "medicine_name": "CoralCal-D",
