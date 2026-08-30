@@ -256,3 +256,4 @@ class AgentTaskContextRepository:
         ]
 
         return "\n".join(lines)
+
