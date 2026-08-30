@@ -87,3 +87,4 @@ def is_role_permitted_for_capability(role: str, capability: ToolCapability) -> b
     """Evaluates whether the given role is granted the requested capability."""
     allowed_caps = ROLE_CAPABILITY_MATRIX.get(role, set())
     return capability in allowed_caps
+

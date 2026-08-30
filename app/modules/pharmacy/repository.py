@@ -18,6 +18,9 @@ class PharmacyRepository:
     async def get_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
         return await self.db.medicines.find_one({"slug": slug})
 
+    async def find_by_id_or_slug(self, identifier: str) -> Optional[Dict[str, Any]]:
+        return await self.db.medicines.find_one({"$or": [{"id": identifier}, {"slug": identifier}]})
+
     async def get_detail_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
         return await self.db.medicine_details.find_one({"slug": slug})
 
@@ -107,6 +110,12 @@ class PharmacyRepository:
         strength = medicine_doc.get("strength", "")
         medicine_doc["name"] = f"{brand} {strength}".strip()
         medicine_doc["medicine_name"] = brand
+        medicine_doc["brand"] = brand
+        if "slug" not in medicine_doc:
+            clean_slug = re.sub(r"[^a-zA-Z0-9]+", "-", f"{brand}-{strength}").strip("-").lower()
+            medicine_doc["slug"] = clean_slug
+        medicine_doc["manufacturer_name"] = medicine_doc.get("manufacturer") or "Square Pharmaceuticals Ltd."
+        medicine_doc["unit_prices"] = medicine_doc.get("unit_prices") or []
         medicine_doc["in_stock"] = medicine_doc.get("stock_count", 0) > 0
         medicine_doc["is_active"] = True
         medicine_doc["created_at"] = datetime.now(timezone.utc)

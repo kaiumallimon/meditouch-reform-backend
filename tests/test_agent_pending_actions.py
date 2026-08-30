@@ -66,3 +66,4 @@ async def test_pending_action_rejects_actor_or_session_mismatch():
         session_id="ses_admin_1",
     )
     assert consumed_wrong_actor is None
+

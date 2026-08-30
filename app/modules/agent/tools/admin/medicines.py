@@ -51,25 +51,7 @@ class CreateMedicineTool(BaseTool):
         session_id: str,
         confirmation_token: Optional[str] = None,
     ) -> ToolResult:
-        # 1. Pydantic Command Validation
-        try:
-            cmd = CreateMedicineCommand(
-                brand=arguments.get("brand", ""),
-                generic_name=arguments.get("generic_name", ""),
-                strength=arguments.get("strength", "500mg"),
-                dosage_form=arguments.get("dosage_form", "Tablet"),
-                unit_price=float(arguments.get("unit_price", 0.0)),
-                manufacturer=arguments.get("manufacturer", "Square Pharmaceuticals"),
-                stock_count=int(arguments.get("stock_count", 100)),
-                requires_prescription=bool(arguments.get("requires_prescription", False)),
-            )
-        except ValidationError as ve:
-            errors = [f"{e['loc'][0]}: {e['msg']}" for e in ve.errors()]
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=f"Validation failed: {'; '.join(errors)}")
-        except Exception as e:
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
-
-        # 2. Execution with Verified Pending Action
+        # 1. Execution with Verified Pending Action
         if confirmation_token:
             payload = await self.pending_repo.validate_and_consume(confirmation_token, actor_id=caller_id, session_id=session_id)
             if not payload:
@@ -82,9 +64,8 @@ class CreateMedicineTool(BaseTool):
                 dosage_form=cdata.get("dosage_form", "Tablet"),
                 strength=cdata.get("strength", "500mg"),
                 unit_price=float(cdata["unit_price"]),
-                price_pack=float(cdata.get("price_pack", float(cdata["unit_price"]) * 10)),
                 pack_size=cdata.get("pack_size", "10x10 Tablets"),
-                manufacturer=cdata.get("manufacturer", "Square Pharmaceuticals"),
+                manufacturer=cdata.get("manufacturer", "Square Pharmaceuticals Ltd."),
                 stock_count=int(cdata.get("stock_count", 100)),
                 requires_prescription=bool(cdata.get("requires_prescription", False)),
             )
@@ -101,6 +82,24 @@ class CreateMedicineTool(BaseTool):
             except Exception as e:
                 await self.pending_repo.mark_failed(confirmation_token, str(e))
                 return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
+
+        # 2. Pydantic Command Validation
+        try:
+            cmd = CreateMedicineCommand(
+                brand=arguments.get("brand", ""),
+                generic_name=arguments.get("generic_name", ""),
+                strength=arguments.get("strength", "500mg"),
+                dosage_form=arguments.get("dosage_form", "Tablet"),
+                unit_price=float(arguments.get("unit_price", 0.0)),
+                manufacturer=arguments.get("manufacturer", "Square Pharmaceuticals Ltd."),
+                stock_count=int(arguments.get("stock_count", 100)),
+                requires_prescription=bool(arguments.get("requires_prescription", False)),
+            )
+        except ValidationError as ve:
+            errors = [f"{e['loc'][0]}: {e['msg']}" for e in ve.errors()]
+            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=f"Validation failed: {'; '.join(errors)}")
+        except Exception as e:
+            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
 
         # 3. Create Pending Action for Confirmation
         token = await self.pending_repo.create_pending_action(
@@ -166,6 +165,36 @@ class UpdateMedicineStockTool(BaseTool):
         session_id: str,
         confirmation_token: Optional[str] = None,
     ) -> ToolResult:
+        if confirmation_token:
+            payload = await self.pending_repo.validate_and_consume(confirmation_token, actor_id=caller_id, session_id=session_id)
+            if not payload:
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid, expired, or already executed confirmation token.")
+
+            cdata = payload.get("command_data", {})
+            stock_to_apply = cdata.get("final_stock", 0)
+            med_id = payload.get("target_id") or cdata.get("medicine_id")
+
+            try:
+                req = UpdateMedicineRequest(stock_count=stock_to_apply)
+                updated = await self.service.update_medicine(med_id, req, admin_id=caller_id)
+                await self.pending_repo.mark_completed(confirmation_token, {"medicine_id": med_id, "new_stock": stock_to_apply})
+
+                return ToolResult(
+                    tool_call_id="",
+                    name=self.name,
+                    status=ToolExecutionStatus.SUCCESS,
+                    result={
+                        "id": updated.id,
+                        "brand": updated.brand or updated.name,
+                        "new_stock": updated.stock_count,
+                        "in_stock": updated.in_stock,
+                    },
+                    metadata={"action": "UPDATE_STOCK", "medicine_id": med_id},
+                )
+            except Exception as e:
+                await self.pending_repo.mark_failed(confirmation_token, str(e))
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
+
         query = arguments.get("medicine", "").strip()
         res = await self.resolver.resolve_medicine(query)
         if res["status"] == "NOT_FOUND":
@@ -182,36 +211,6 @@ class UpdateMedicineStockTool(BaseTool):
             final_stock = max(0, current_stock + int(arguments["quantity_delta"]))
         else:
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Please specify either new_stock or quantity_delta.")
-
-        if confirmation_token:
-            payload = await self.pending_repo.validate_and_consume(confirmation_token, actor_id=caller_id, session_id=session_id)
-            if not payload:
-                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid, expired, or already executed confirmation token.")
-
-            cdata = payload.get("command_data", {})
-            stock_to_apply = cdata.get("final_stock", final_stock)
-
-            try:
-                req = UpdateMedicineRequest(stock_count=stock_to_apply)
-                updated = await self.service.update_medicine(med["id"], req, admin_id=caller_id)
-                await self.pending_repo.mark_completed(confirmation_token, {"medicine_id": med["id"], "new_stock": stock_to_apply})
-
-                return ToolResult(
-                    tool_call_id="",
-                    name=self.name,
-                    status=ToolExecutionStatus.SUCCESS,
-                    result={
-                        "id": updated.id,
-                        "brand": updated.brand or updated.name,
-                        "previous_stock": current_stock,
-                        "new_stock": updated.stock_count,
-                        "in_stock": updated.in_stock,
-                    },
-                    metadata={"action": "UPDATE_STOCK", "medicine_id": med["id"]},
-                )
-            except Exception as e:
-                await self.pending_repo.mark_failed(confirmation_token, str(e))
-                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
 
         token = await self.pending_repo.create_pending_action(
             actor_id=caller_id,

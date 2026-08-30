@@ -131,3 +131,4 @@ class AgentPendingActionRepository:
             {"$set": {"status": "CANCELLED"}}
         )
         return res.modified_count > 0
+

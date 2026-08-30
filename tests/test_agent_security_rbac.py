@@ -87,3 +87,4 @@ def test_unauthenticated_caller_blocked_from_mutations():
     )
     assert is_auth is False
     assert "Authentication required" in err
+

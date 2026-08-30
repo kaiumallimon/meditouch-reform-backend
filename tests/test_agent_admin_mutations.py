@@ -112,3 +112,4 @@ async def test_admin_delete_medicine_with_confirmation_and_audit():
 
     assert res2.status == ToolExecutionStatus.SUCCESS
     assert res2.result["status"] == "DELETED"
+
