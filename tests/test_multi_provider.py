@@ -61,3 +61,31 @@ async def test_resilient_multi_provider_all_fail_raises_runtime_error():
             await multi.chat_complete(messages=[{"role": "user", "content": "Hi"}])
 
         assert "All configured LLM providers failed" in str(exc_info.value)
+
+@pytest.mark.asyncio
+async def test_openrouter_provider_fallback_to_openrouter():
+    p_groq = OpenAICompatibleProvider(name="groq", api_key="k_groq", base_url="https://api.groq.com/openai/v1", model="llama-3.3-70b-versatile")
+    p_openrouter = OpenAICompatibleProvider(name="openrouter", api_key="k_openrouter", base_url="https://openrouter.ai/api/v1", model="openrouter/free")
+
+    with patch("httpx.AsyncClient.post") as mock_post:
+        # Groq 429 rate limit
+        resp_429 = AsyncMock()
+        resp_429.status_code = 429
+        resp_429.text = '{"error":{"message":"Rate limit exceeded"}}'
+
+        # OpenRouter 200 OK
+        resp_200 = AsyncMock()
+        resp_200.status_code = 200
+        resp_200.json = lambda: {
+            "choices": [{"message": {"role": "assistant", "content": "Hello from OpenRouter Free!"}}]
+        }
+
+        mock_post.side_effect = [resp_429, resp_200]
+
+        multi = ResilientMultiProvider(providers=[p_groq, p_openrouter])
+        res = await multi.chat_complete(messages=[{"role": "user", "content": "Hi"}])
+
+        assert res["_provider"] == "openrouter"
+        assert res["_model"] == "openrouter/free"
+        assert res["choices"][0]["message"]["content"] == "Hello from OpenRouter Free!"
+
