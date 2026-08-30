@@ -29,15 +29,24 @@ class SearchMedicinesTool(BaseTool):
         self.service = PharmacyService(repo, db)
 
     async def execute(self, arguments: Dict[str, Any], caller_id: str, caller_role: str, session_id: str, confirmation_token: Optional[str] = None) -> ToolResult:
-        query = arguments.get("query", "")
+        query = arguments.get("query", "").strip()
+        if not query:
+            return ToolResult(
+                tool_call_id="",
+                name=self.name,
+                status=ToolExecutionStatus.SUCCESS,
+                result={"count": 0, "medicines": [], "message": "Please specify a brand or generic medicine name to search."},
+            )
+
         rx = arguments.get("requires_prescription")
         in_stock = arguments.get("in_stock_only", False)
-        limit = min(arguments.get("limit", 5), 10)
+        limit = min(int(arguments.get("limit", 5)), 10)
 
         filters = MedicineFilterParams(search=query, requires_prescription=rx, in_stock_only=in_stock)
         pagination = PaginationParams(page=1, limit=limit)
         res = await self.service.search_catalog(filters, pagination)
 
+        # Filter out cosmetic/skincare products from general medicine search
         items_summary = [
             {
                 "id": m.id,
@@ -45,7 +54,7 @@ class SearchMedicinesTool(BaseTool):
                 "brand": m.brand or m.name or m.medicine_name,
                 "generic_name": m.generic_name,
                 "strength": m.strength,
-                "dosage_form": m.dosage_form,
+                "dosage_form": m.dosage_form or "Tablet",
                 "unit_price": m.unit_price,
                 "pack_size": m.pack_size,
                 "in_stock": m.in_stock,
@@ -55,13 +64,14 @@ class SearchMedicinesTool(BaseTool):
                 "manufacturer": m.manufacturer or m.manufacturer_name,
             }
             for m in res.items
+            if (m.category or "").upper() not in ["SKIN_CARE", "COSMETICS", "BEAUTY", "SKIN CARE"]
         ]
 
         return ToolResult(
             tool_call_id="",
             name=self.name,
             status=ToolExecutionStatus.SUCCESS,
-            result={"count": len(items_summary), "medicines": items_summary},
+            result={"count": len(items_summary), "medicines": items_summary, "query": query},
             metadata={"count": len(items_summary)},
         )
 
