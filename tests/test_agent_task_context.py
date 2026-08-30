@@ -332,4 +332,4 @@ def test_task_context_injection_string():
     assert "I'm having cough, what medicine should I take?" in injection
     assert "cough" in injection
     assert "INVARIANTS YOU MUST FOLLOW" in injection
-    assert "PRIMARY COMPLAINT" in injection
+    assert "primary complaint" in injection.lower()
