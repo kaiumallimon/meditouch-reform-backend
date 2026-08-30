@@ -62,3 +62,13 @@ async def get_current_user_payload(
     if not credentials:
         raise UnauthorizedException("Authentication token is missing")
     return decode_token(credentials.credentials, is_refresh=False)
+
+async def get_optional_user_payload(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme)
+) -> Optional[Dict[str, Any]]:
+    if not credentials:
+        return None
+    try:
+        return decode_token(credentials.credentials, is_refresh=False)
+    except Exception:
+        return None
