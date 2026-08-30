@@ -102,3 +102,4 @@ class ResponseAssembler:
         self._raw_tool_results.clear()
         self._medicine_cards.clear()
         self._components.clear()
+
