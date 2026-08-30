@@ -1,5 +1,6 @@
 from typing import Dict, Any, Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pydantic import ValidationError
 from app.modules.agent.tools.base import BaseTool
 from app.modules.agent.schemas.tools import ToolExecutionStatus, ToolResult
 from app.modules.agent.security.confirmation import confirmation_manager
@@ -50,22 +51,29 @@ class CreateDoctorTool(BaseTool):
         if not self.is_authorized(caller_role):
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
 
+        # 1. Pydantic Schema Validation
+        try:
+            req = CreateDoctorAccountRequest(
+                name=arguments["name"],
+                phone=arguments["phone"],
+                email=arguments["email"],
+                bmdc_reg_number=arguments["bmdc_reg_number"],
+                specialties=arguments.get("specialties", ["General Medicine"]),
+                qualifications=arguments.get("qualifications", ["MBBS"]),
+                consultation_fee=float(arguments.get("consultation_fee", 0.0)),
+                experience_years=int(arguments.get("experience_years", 5)),
+            )
+        except ValidationError as ve:
+            errors = [f"{e['loc'][0]}: {e['msg']}" for e in ve.errors()]
+            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=f"Validation failed: {'; '.join(errors)}")
+        except Exception as e:
+            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
+
+        # 2. Execution with Confirmation
         if confirmation_token:
             payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
             if not payload:
                 return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid or expired confirmation token")
-
-            cdata = payload.get("command_data", arguments)
-            req = CreateDoctorAccountRequest(
-                name=cdata["name"],
-                phone=cdata["phone"],
-                email=cdata["email"],
-                bmdc_reg_number=cdata["bmdc_reg_number"],
-                specialties=cdata.get("specialties", ["General Medicine"]),
-                qualifications=cdata.get("qualifications", ["MBBS"]),
-                consultation_fee=float(cdata["consultation_fee"]),
-                experience_years=int(cdata.get("experience_years", 5)),
-            )
 
             try:
                 doc = await self.service.create_doctor_account(req, admin_id=caller_id)
@@ -140,9 +148,14 @@ class VerifyDoctorTool(BaseTool):
         if not self.is_authorized(caller_role):
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
 
-        doctor_id = arguments["doctor_id"].strip()
-        status_str = arguments["status"].upper()
+        doctor_id = arguments.get("doctor_id", "").strip()
+        status_str = arguments.get("status", "").upper()
         rejection_reason = arguments.get("rejection_reason")
+
+        try:
+            status_enum = DoctorVerificationStatus(status_str)
+        except ValueError:
+            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=f"Invalid verification status: '{status_str}'. Must be VERIFIED, REJECTED, or PENDING.")
 
         if confirmation_token:
             payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
@@ -150,7 +163,6 @@ class VerifyDoctorTool(BaseTool):
                 return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid or expired confirmation token")
 
             try:
-                status_enum = DoctorVerificationStatus(status_str)
                 doc = await self.service.verify_doctor(
                     doctor_id=doctor_id,
                     status=status_enum,

@@ -1,8 +1,9 @@
 from typing import Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pydantic import ValidationError
 from app.modules.agent.tools.base import BaseTool
 from app.modules.agent.schemas.tools import ToolExecutionStatus, ToolResult
-from app.modules.agent.commands.user_commands import CreateUserCommand, DeactivateUserCommand, DeleteUserCommand
+from app.modules.agent.commands.user_commands import CreateUserCommand
 from app.modules.agent.security.confirmation import confirmation_manager
 from app.modules.agent.tools.resolver import EntityResolver
 from app.modules.admin.repository import AdminRepository
@@ -20,20 +21,9 @@ class SearchUsersTool(BaseTool):
     parameters = {
         "type": "object",
         "properties": {
-            "query": {
-                "type": "string",
-                "description": "Search term: email address, full name, phone number, or account ID",
-            },
-            "role": {
-                "type": "string",
-                "enum": ["USER", "DOCTOR", "NURSE", "ADMIN", "DEVELOPER"],
-                "description": "Optional filter by user role",
-            },
-            "limit": {
-                "type": "integer",
-                "description": "Maximum number of results to return (default: 5)",
-                "default": 5,
-            },
+            "query": {"type": "string", "description": "Search term: email address, full name, phone number, or account ID"},
+            "role": {"type": "string", "enum": ["USER", "DOCTOR", "NURSE", "ADMIN", "DEVELOPER"], "description": "Optional filter by user role"},
+            "limit": {"type": "integer", "description": "Maximum number of results to return (default: 5)", "default": 5},
         },
         "required": ["query"],
     }
@@ -43,22 +33,9 @@ class SearchUsersTool(BaseTool):
         self.resolver = EntityResolver(db)
         self.admin_repo = AdminRepository(db)
 
-    async def execute(
-        self,
-        arguments: Dict[str, Any],
-        caller_id: str,
-        caller_role: str,
-        session_id: str,
-        confirmation_token: Optional[str] = None,
-    ) -> ToolResult:
+    async def execute(self, arguments: Dict[str, Any], caller_id: str, caller_role: str, session_id: str, confirmation_token: Optional[str] = None) -> ToolResult:
         if not self.is_authorized(caller_role):
-            return ToolResult(
-                tool_call_id="",
-                name=self.name,
-                status=ToolExecutionStatus.PERMISSION_DENIED,
-                result=None,
-                error_message="Admin privileges required",
-            )
+            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
 
         query = arguments.get("query", "").strip()
         role = arguments.get("role")
@@ -79,28 +56,11 @@ class SearchUsersTool(BaseTool):
                     "address": u.get("address"),
                     "created_at": str(u.get("created_at")),
                 }
-                return ToolResult(
-                    tool_call_id="",
-                    name=self.name,
-                    status=ToolExecutionStatus.SUCCESS,
-                    result={"users": [sanitized], "total": 1, "query": query},
-                    metadata={"action": "SEARCH_USERS", "matches": 1},
-                )
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.SUCCESS, result={"users": [sanitized], "total": 1, "query": query}, metadata={"action": "SEARCH_USERS", "matches": 1})
             elif res["status"] == "AMBIGUOUS":
-                return ToolResult(
-                    tool_call_id="",
-                    name=self.name,
-                    status=ToolExecutionStatus.SUCCESS,
-                    result={"users": res["candidates"], "total": len(res["candidates"]), "message": "Multiple matches found"},
-                    metadata={"action": "SEARCH_USERS", "matches": len(res["candidates"])},
-                )
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.SUCCESS, result={"users": res["candidates"], "total": len(res["candidates"]), "message": "Multiple matches found"}, metadata={"action": "SEARCH_USERS", "matches": len(res["candidates"])})
 
-        users, total = await self.admin_repo.get_all_users_admin(
-            search=query if query else None,
-            role=role,
-            limit=limit,
-        )
-
+        users, total = await self.admin_repo.get_all_users_admin(search=query if query else None, role=role, limit=limit)
         sanitized_list = [
             {
                 "id": u.get("id"),
@@ -115,14 +75,7 @@ class SearchUsersTool(BaseTool):
             }
             for u in users
         ]
-
-        return ToolResult(
-            tool_call_id="",
-            name=self.name,
-            status=ToolExecutionStatus.SUCCESS,
-            result={"users": sanitized_list, "total": total, "query": query},
-            metadata={"action": "SEARCH_USERS", "matches": len(sanitized_list)},
-        )
+        return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.SUCCESS, result={"users": sanitized_list, "total": total, "query": query}, metadata={"action": "SEARCH_USERS", "matches": len(sanitized_list)})
 
 class CreateUserTool(BaseTool):
     name = "create_user"
@@ -153,9 +106,16 @@ class CreateUserTool(BaseTool):
         if not self.is_authorized(caller_role):
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
 
-        cmd = CreateUserCommand(**arguments)
+        # 1. Pydantic Command Validation
+        try:
+            cmd = CreateUserCommand(**arguments)
+        except ValidationError as ve:
+            errors = [f"{e['loc'][0]}: {e['msg']}" for e in ve.errors()]
+            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=f"Validation failed: {'; '.join(errors)}")
+        except Exception as e:
+            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
 
-        # 1. If confirmation token is provided, execute creation
+        # 2. If confirmation token is present, execute via domain service
         if confirmation_token:
             payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
             if not payload:
@@ -182,7 +142,7 @@ class CreateUserTool(BaseTool):
             except Exception as e:
                 return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
 
-        # 2. Otherwise, request admin confirmation
+        # 3. Request Admin Confirmation
         token = confirmation_manager.create_pending_confirmation(
             session_id=session_id,
             action="create_user",

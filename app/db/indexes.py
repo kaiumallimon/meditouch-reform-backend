@@ -32,19 +32,42 @@ async def create_db_indexes(db: AsyncIOMotorDatabase) -> None:
             IndexModel([("payment_id", ASCENDING)], name="idx_appointments_payment"),
             IndexModel([("start_time", ASCENDING)], name="idx_appointments_start_time"),
         ])
-        await db.medicines.create_indexes([
-            IndexModel([("slug", ASCENDING)], unique=True, sparse=True, name="idx_medicines_slug_unique"),
-            IndexModel(
-                [("name", TEXT), ("generic_name", TEXT), ("brand", TEXT), ("manufacturer", TEXT), ("medicine_name", TEXT)],
-                name="idx_medicines_text_search"
-            ),
-            IndexModel([("category", ASCENDING)], name="idx_medicines_category"),
-            IndexModel([("category_slug", ASCENDING)], name="idx_medicines_category_slug"),
-            IndexModel([("is_active", ASCENDING)], name="idx_medicines_active"),
-            IndexModel([("in_stock", ASCENDING)], name="idx_medicines_in_stock"),
-            IndexModel([("generic_name", ASCENDING)], name="idx_medicines_generic"),
-            IndexModel([("brand", ASCENDING), ("strength", ASCENDING)], name="idx_medicines_brand_strength"),
-        ])
+        try:
+            await db.medicines.create_indexes([
+                IndexModel([("slug", ASCENDING)], unique=True, sparse=True, name="idx_medicines_slug_unique"),
+                IndexModel(
+                    [("name", TEXT), ("generic_name", TEXT), ("brand", TEXT), ("manufacturer", TEXT), ("medicine_name", TEXT)],
+                    name="idx_medicines_text_search"
+                ),
+                IndexModel([("category", ASCENDING)], name="idx_medicines_category"),
+                IndexModel([("category_slug", ASCENDING)], name="idx_medicines_category_slug"),
+                IndexModel([("is_active", ASCENDING)], name="idx_medicines_active"),
+                IndexModel([("in_stock", ASCENDING)], name="idx_medicines_in_stock"),
+                IndexModel([("generic_name", ASCENDING)], name="idx_medicines_generic"),
+                IndexModel([("brand", ASCENDING), ("strength", ASCENDING)], name="idx_medicines_brand_strength"),
+            ])
+        except Exception as idx_err:
+            if "IndexOptionsConflict" in str(idx_err) or "IndexKeySpecsConflict" in str(idx_err) or "85" in str(idx_err):
+                logger.info("Resolving conflicting text index on medicines collection...")
+                try:
+                    await db.medicines.drop_index("idx_medicines_text_search")
+                except Exception:
+                    pass
+                await db.medicines.create_indexes([
+                    IndexModel([("slug", ASCENDING)], unique=True, sparse=True, name="idx_medicines_slug_unique"),
+                    IndexModel(
+                        [("name", TEXT), ("generic_name", TEXT), ("brand", TEXT), ("manufacturer", TEXT), ("medicine_name", TEXT)],
+                        name="idx_medicines_text_search"
+                    ),
+                    IndexModel([("category", ASCENDING)], name="idx_medicines_category"),
+                    IndexModel([("category_slug", ASCENDING)], name="idx_medicines_category_slug"),
+                    IndexModel([("is_active", ASCENDING)], name="idx_medicines_active"),
+                    IndexModel([("in_stock", ASCENDING)], name="idx_medicines_in_stock"),
+                    IndexModel([("generic_name", ASCENDING)], name="idx_medicines_generic"),
+                    IndexModel([("brand", ASCENDING), ("strength", ASCENDING)], name="idx_medicines_brand_strength"),
+                ])
+            else:
+                raise idx_err
         await db.medicine_details.create_indexes([
             IndexModel([("slug", ASCENDING)], unique=True, name="idx_medicine_details_slug_unique"),
             IndexModel([("medicine_id", ASCENDING)], name="idx_medicine_details_med_id"),

@@ -48,8 +48,10 @@ class TokenRouterProvider(LLMProvider):
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
+        timeout_config = httpx.Timeout(120.0, connect=15.0, read=120.0)
+
         try:
-            async with httpx.AsyncClient(timeout=45.0) as client:
+            async with httpx.AsyncClient(timeout=timeout_config) as client:
                 resp = await client.post(
                     f"{self.base_url}/chat/completions",
                     headers=self.headers,
@@ -59,14 +61,18 @@ class TokenRouterProvider(LLMProvider):
                     logger.error(f"TokenRouter API error [{resp.status_code}]: {resp.text}")
                     raise RuntimeError(f"TokenRouter API error ({resp.status_code}): {resp.text}")
                 return resp.json()
+        except httpx.TimeoutException:
+            logger.error(f"Timeout waiting for TokenRouter response from {self.base_url}")
+            raise RuntimeError(f"Request to LLM provider at '{self.base_url}' timed out (120s). The model may be under high load.")
         except httpx.ConnectError as e:
             logger.error(f"Cannot connect to LLM Provider at {self.base_url}: {e}")
             raise RuntimeError(
                 f"Cannot connect to LLM provider at '{self.base_url}'. Please verify your TOKENROUTER_BASE_URL (or check internet connection). Details: {e}"
             )
         except httpx.RequestError as e:
-            logger.error(f"Request error to {self.base_url}: {e}")
-            raise RuntimeError(f"LLM request error to '{self.base_url}': {e}")
+            err_details = str(e) or type(e).__name__
+            logger.error(f"Request error to {self.base_url}: {err_details}")
+            raise RuntimeError(f"LLM request error to '{self.base_url}': {err_details}")
 
     async def stream_chat(
         self,
@@ -86,7 +92,8 @@ class TokenRouterProvider(LLMProvider):
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        timeout_config = httpx.Timeout(120.0, connect=15.0, read=120.0)
+        async with httpx.AsyncClient(timeout=timeout_config) as client:
             async with client.stream(
                 "POST",
                 f"{self.base_url}/chat/completions",

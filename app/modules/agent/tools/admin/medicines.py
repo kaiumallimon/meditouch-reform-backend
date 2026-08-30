@@ -1,10 +1,12 @@
 from typing import Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from datetime import datetime, timezone
+from pydantic import ValidationError
 import uuid
 import re
 from app.modules.agent.tools.base import BaseTool
 from app.modules.agent.schemas.tools import ToolExecutionStatus, ToolResult
+from app.modules.agent.commands.medicine_commands import CreateMedicineCommand, UpdateMedicineCommand
 from app.modules.agent.security.confirmation import confirmation_manager
 from app.modules.agent.tools.resolver import EntityResolver
 from app.common.enums import UserRole
@@ -45,8 +47,25 @@ class CreateMedicineTool(BaseTool):
         if not self.is_authorized(caller_role):
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
 
-        brand = arguments["brand"].strip()
+        # 1. Pydantic Command Validation
+        try:
+            cmd = CreateMedicineCommand(
+                brand=arguments.get("brand", ""),
+                generic_name=arguments.get("generic_name", ""),
+                strength=arguments.get("strength", "500mg"),
+                dosage_form=arguments.get("dosage_form", "Tablet"),
+                unit_price=float(arguments.get("unit_price", 0.0)),
+                manufacturer=arguments.get("manufacturer", "Square Pharmaceuticals"),
+                stock_count=int(arguments.get("stock_count", 100)),
+                requires_prescription=bool(arguments.get("requires_prescription", False)),
+            )
+        except ValidationError as ve:
+            errors = [f"{e['loc'][0]}: {e['msg']}" for e in ve.errors()]
+            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=f"Validation failed: {'; '.join(errors)}")
+        except Exception as e:
+            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
 
+        # 2. Execution with Confirmation
         if confirmation_token:
             payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
             if not payload:
@@ -86,7 +105,7 @@ class CreateMedicineTool(BaseTool):
                 name=self.name,
                 status=ToolExecutionStatus.SUCCESS,
                 result=doc,
-                metadata={"action": "CREATE_MEDICINE", "medicine_id": doc["id"], "brand": brand},
+                metadata={"action": "CREATE_MEDICINE", "medicine_id": doc["id"], "brand": cmd.brand},
             )
 
         token = confirmation_manager.create_pending_confirmation(
@@ -94,8 +113,8 @@ class CreateMedicineTool(BaseTool):
             action="create_medicine",
             target_type="MEDICINE",
             target_id="new_medicine",
-            target_name=brand,
-            summary=f"Add medicine {brand} ({arguments['generic_name']}, ৳{arguments['unit_price']}/unit, Stock: {arguments.get('stock_count', 100)})",
+            target_name=cmd.brand,
+            summary=f"Add medicine {cmd.brand} ({cmd.generic_name}, ৳{cmd.unit_price}/unit, Stock: {cmd.stock_count})",
             command_data=arguments,
         )
 
@@ -105,16 +124,16 @@ class CreateMedicineTool(BaseTool):
             status=ToolExecutionStatus.CONFIRMATION_REQUIRED,
             result={
                 "action": "create_medicine",
-                "brand": brand,
-                "generic_name": arguments["generic_name"],
-                "dosage_form": arguments.get("dosage_form", "Tablet"),
-                "strength": arguments.get("strength", "500mg"),
-                "unit_price": arguments["unit_price"],
-                "stock_count": arguments.get("stock_count", 100),
+                "brand": cmd.brand,
+                "generic_name": cmd.generic_name,
+                "dosage_form": cmd.dosage_form,
+                "strength": cmd.strength,
+                "unit_price": cmd.unit_price,
+                "stock_count": cmd.stock_count,
             },
             requires_confirmation=True,
             confirmation_token=token,
-            confirmation_prompt=f"Add new medicine '{brand}' ({arguments['generic_name']}, Unit Price: ৳{arguments['unit_price']}, Initial Stock: {arguments.get('stock_count', 100)}) to the pharmacy catalog? Confirm?",
+            confirmation_prompt=f"Add new medicine '{cmd.brand}' ({cmd.generic_name}, Unit Price: ৳{cmd.unit_price}, Initial Stock: {cmd.stock_count}) to the pharmacy catalog? Confirm?",
         )
 
 class UpdateMedicineStockTool(BaseTool):
@@ -147,7 +166,7 @@ class UpdateMedicineStockTool(BaseTool):
         if not self.is_authorized(caller_role):
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
 
-        query = arguments["medicine"].strip()
+        query = arguments.get("medicine", "").strip()
         res = await self.resolver.resolve_medicine(query)
         if res["status"] == "NOT_FOUND":
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=f"Medicine not found: {query}")
@@ -262,7 +281,7 @@ class DeleteMedicineTool(BaseTool):
                 metadata={"action": "DELETE_MEDICINE", "medicine_id": med_id},
             )
 
-        query = arguments["medicine"].strip()
+        query = arguments.get("medicine", "").strip()
         res = await self.resolver.resolve_medicine(query)
         if res["status"] == "NOT_FOUND":
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=f"Medicine not found: {query}")
