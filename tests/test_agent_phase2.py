@@ -171,3 +171,21 @@ async def test_deactivate_user_requires_two_step_confirmation():
 
     assert res2.status == ToolExecutionStatus.SUCCESS
     assert res2.result["status"] == "DEACTIVATED"
+
+@pytest.mark.asyncio
+async def test_create_user_requires_two_step_confirmation():
+    mock_db = MagicMock()
+    tool = CreateUserTool(mock_db)
+
+    # Step 1: Initial call without confirmation token -> returns CONFIRMATION_REQUIRED
+    res1 = await tool.execute(
+        arguments={"name": "New Candidate", "phone": "+8801711223344", "email": "candidate@example.com", "role": "USER"},
+        caller_id="usr_admin_1",
+        caller_role=UserRole.ADMIN.value,
+        session_id="ses_admin_create_user",
+    )
+
+    assert res1.status == ToolExecutionStatus.CONFIRMATION_REQUIRED
+    assert res1.requires_confirmation is True
+    assert res1.confirmation_token is not None
+    assert "candidate@example.com" in res1.confirmation_prompt
