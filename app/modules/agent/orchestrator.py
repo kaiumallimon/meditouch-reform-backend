@@ -95,6 +95,16 @@ class AgentOrchestrator:
                 final_answer = err_msg
                 break
 
+            active_model_tag = response.get("_tag") or getattr(self.llm, "model_tag", "AI Model")
+            yield {
+                "event": "model_info",
+                "data": {
+                    "tag": active_model_tag,
+                    "provider": response.get("_provider"),
+                    "model": response.get("_model"),
+                },
+            }
+
             choices = response.get("choices", [])
             if not choices:
                 break
@@ -215,4 +225,11 @@ class AgentOrchestrator:
         # 5. State: COMPLETE
         state.transition(AgentState.COMPLETE)
         yield {"event": StreamEventType.STATE.value, "data": {"state": AgentState.COMPLETE.value}}
-        yield {"event": StreamEventType.DONE.value, "data": {"finish_reason": "stop", "full_content": final_answer}}
+        yield {
+            "event": StreamEventType.DONE.value,
+            "data": {
+                "finish_reason": "stop",
+                "full_content": final_answer,
+                "model_name": active_model_tag if "active_model_tag" in locals() else getattr(self.llm, "model_tag", "AI Model"),
+            },
+        }

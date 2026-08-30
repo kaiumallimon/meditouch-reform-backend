@@ -79,10 +79,27 @@ class Settings(BaseSettings):
     SMTP_SSL: bool = True
     FRONTEND_BASE_URL: str = Field(default="http://localhost:3000")
 
-    # TokenRouter LLM Configuration
+    # Multi-Provider LLM Configuration
+    # 1. Groq (Sequential Multi-Model Fallback Chain)
+    GROQ_API_KEY: str = Field(default="")
+    GROQ_BASE_URL: str = Field(default="https://api.groq.com/openai/v1")
+    GROQ_MODEL: str = Field(default="llama-3.3-70b-versatile")
+    GROQ_MODELS: str = Field(default="llama-3.3-70b-versatile,openai/gpt-oss-120b,qwen/qwen3.8-27b,qwen/qwen3.6-27b,openai/gpt-oss-20b,groq/compound,groq/compound-mini,allam-2-7b")
+
+    # 2. OpenRouter (Multi-Model Free/Commercial Chain)
+    OPENROUTER_API_KEY: str = Field(default="")
+    OPENROUTER_BASE_URL: str = Field(default="https://openrouter.ai/api/v1")
+    OPENROUTER_MODEL: str = Field(default="meta-llama/llama-3.3-70b-instruct:free")
+    OPENROUTER_MODELS: str = Field(default="meta-llama/llama-3.3-70b-instruct:free,google/gemini-2.0-flash-exp:free,qwen/qwen-2.5-72b-instruct:free")
+
+    # 3. TokenRouter
     TOKENROUTER_API_KEY: str = Field(default="")
     TOKENROUTER_BASE_URL: str = Field(default="https://api.tokenrouter.com/v1")
     TOKENROUTER_MODEL: str = Field(default="z-ai/glm-5.3-free")
+    TOKENROUTER_MODELS: str = Field(default="z-ai/glm-5.3-free")
+
+    # Provider fallback priority order (comma-separated: groq,openrouter,tokenrouter)
+    LLM_PROVIDER_ORDER: str = Field(default="groq,openrouter,tokenrouter")
 
     model_config = SettingsConfigDict(
         env_file=".env",
