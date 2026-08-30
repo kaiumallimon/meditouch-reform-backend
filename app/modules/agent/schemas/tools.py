@@ -6,6 +6,7 @@ class ToolExecutionStatus(str, Enum):
     SUCCESS = "SUCCESS"
     ERROR = "ERROR"
     CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
+    CLARIFICATION_REQUIRED = "CLARIFICATION_REQUIRED"
     PERMISSION_DENIED = "PERMISSION_DENIED"
 
 class ToolCallDefinition(BaseModel):
@@ -27,6 +28,9 @@ class ToolResult(BaseModel):
     requires_confirmation: bool = False
     confirmation_token: Optional[str] = None
     confirmation_prompt: Optional[str] = None
+    requires_clarification: bool = False
+    clarification_id: Optional[str] = None
+    clarification_payload: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
 
 class ConfirmationPayload(BaseModel):

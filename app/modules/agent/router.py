@@ -14,6 +14,7 @@ from app.modules.agent.schemas.chat import (
     ChatMessageResponse,
     SessionType,
 )
+from app.modules.agent.schemas.clarification import ClarificationSubmissionRequest
 from app.modules.agent.service import AgentChatService
 
 # -----------------------------------------------------------------------------
@@ -45,6 +46,39 @@ async def stream_chat(
 
     generator = service.stream_chat_turn(
         req=req,
+        user_id=user_id,
+        user_role=user_role,
+        explicit_session_type=SessionType.USER,
+    )
+
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+@router.post("/sessions/{session_id}/clarifications/{clarification_id}/submit")
+async def submit_clarification(
+    session_id: str,
+    clarification_id: str,
+    submission: ClarificationSubmissionRequest,
+    payload: Optional[dict] = Depends(get_optional_user_payload),
+    service: AgentChatService = Depends(get_agent_service),
+):
+    """
+    Submits structured clarification answers, records them in the session, and streams the next agent turn.
+    """
+    user_id = payload.get("sub", "guest_user") if payload else "guest_user"
+    user_role = payload.get("role", UserRole.USER.value) if payload else UserRole.USER.value
+
+    generator = service.stream_clarification_submission(
+        session_id=session_id,
+        clarification_id=clarification_id,
+        submission=submission,
         user_id=user_id,
         user_role=user_role,
         explicit_session_type=SessionType.USER,
@@ -142,6 +176,39 @@ async def stream_admin_chat(
 
     generator = service.stream_chat_turn(
         req=req,
+        user_id=user_id,
+        user_role=user_role,
+        explicit_session_type=SessionType.ADMIN,
+    )
+
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+@admin_chat_router.post("/sessions/{session_id}/clarifications/{clarification_id}/submit")
+async def submit_admin_clarification(
+    session_id: str,
+    clarification_id: str,
+    submission: ClarificationSubmissionRequest,
+    payload: dict = Depends(require_admin_role),
+    service: AgentChatService = Depends(get_agent_service),
+):
+    """
+    Submits admin clarification answers (e.g. entity selection) and streams the next admin turn.
+    """
+    user_id = payload["sub"]
+    user_role = payload.get("role", UserRole.ADMIN.value)
+
+    generator = service.stream_clarification_submission(
+        session_id=session_id,
+        clarification_id=clarification_id,
+        submission=submission,
         user_id=user_id,
         user_role=user_role,
         explicit_session_type=SessionType.ADMIN,

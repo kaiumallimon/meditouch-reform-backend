@@ -17,6 +17,7 @@ class TriageAssessment(BaseModel):
     guidance: str
     recommended_action: str
     can_recommend_medication: bool = False
+    clarification_questions: Optional[List[Dict[str, Any]]] = None
 
 
 # Deterministic emergency regex patterns / red flags
@@ -124,6 +125,7 @@ class MedicalSafetyPolicy:
                 ),
                 recommended_action="CALL_EMERGENCY_SERVICES",
                 can_recommend_medication=False,
+                clarification_questions=None,
             )
 
         # 2. Screen for Urgent Medical Review Flags
@@ -144,10 +146,12 @@ class MedicalSafetyPolicy:
                 ),
                 recommended_action="CONSULT_DOCTOR_URGENTLY",
                 can_recommend_medication=False,
+                clarification_questions=None,
             )
 
         # 3. Check for general / vague symptom queries
-        is_vague_symptom_query = any(
+        is_allergy_query = any(w in normalized for w in ["allergy", "allergic", "rash", "itching", "itchy", "hives"])
+        is_vague_symptom_query = is_allergy_query or any(
             w in normalized
             for w in [
                 "what should i take",
@@ -158,25 +162,86 @@ class MedicalSafetyPolicy:
                 "give me something for",
                 "cure my",
                 "treat my",
-                "mild allergy",
-                "having allergy",
                 "have fever",
                 "have headache",
+                "pain in",
+                "cough",
+                "sore throat",
             ]
         )
 
         if is_vague_symptom_query:
+            questions = []
+            if is_allergy_query:
+                questions = [
+                    {
+                        "id": "symptoms",
+                        "type": "multi_select",
+                        "question": "What symptoms are you experiencing?",
+                        "required": True,
+                        "options": [
+                            {"id": "sneezing", "label": "Sneezing or runny nose"},
+                            {"id": "itchy_eyes", "label": "Itchy or watery eyes"},
+                            {"id": "hives", "label": "Hives or skin itching"},
+                            {"id": "swelling", "label": "Swelling (face / lips / throat)"},
+                            {"id": "breathing_difficulty", "label": "Difficulty breathing"},
+                            {"id": "other", "label": "Other symptoms"},
+                        ],
+                        "allow_custom_input": True,
+                    },
+                    {
+                        "id": "duration",
+                        "type": "single_select",
+                        "question": "How long have you had these symptoms?",
+                        "required": True,
+                        "options": [
+                            {"id": "today", "label": "Started today"},
+                            {"id": "few_days", "label": "A few days (2-5 days)"},
+                            {"id": "week_plus", "label": "More than a week"},
+                        ],
+                    },
+                    {
+                        "id": "medication_taken",
+                        "type": "single_select",
+                        "question": "Have you already taken anything for it?",
+                        "required": False,
+                        "options": [
+                            {"id": "none", "label": "No"},
+                            {"id": "antihistamine", "label": "Yes (Antihistamine / Allergy pill)"},
+                            {"id": "other_med", "label": "Yes (Other medicine)"},
+                        ],
+                    },
+                ]
+            else:
+                questions = [
+                    {
+                        "id": "symptoms_detail",
+                        "type": "text",
+                        "question": "Please describe your specific symptoms (e.g. location, severity, fever temperature):",
+                        "required": True,
+                        "placeholder": "e.g. Headache on forehead, mild fever since yesterday",
+                    },
+                    {
+                        "id": "duration",
+                        "type": "single_select",
+                        "question": "How long have you been experiencing this?",
+                        "required": True,
+                        "options": [
+                            {"id": "today", "label": "Started today"},
+                            {"id": "few_days", "label": "A few days"},
+                            {"id": "week_plus", "label": "More than a week"},
+                        ],
+                    },
+                ]
+
             return TriageAssessment(
                 status=TriageStatus.INSUFFICIENT_INFORMATION,
                 is_emergency=False,
                 emergency_indicators_found=[],
-                guidance=(
-                    "A broad symptom description alone is not enough to safely evaluate your condition or determine appropriate treatment. "
-                    "Please describe your specific symptoms in more detail (e.g., duration, severity, location), "
-                    "or consult a licensed doctor for proper clinical assessment."
-                ),
+                guidance="I need a little more information before I can safely evaluate your symptoms.",
                 recommended_action="ASK_CLARIFYING_SYMPTOMS",
                 can_recommend_medication=False,
+                clarification_questions=questions,
             )
 
         return TriageAssessment(
@@ -186,4 +251,5 @@ class MedicalSafetyPolicy:
             guidance="Provide safe, factual medical and health information from verified sources.",
             recommended_action="PROVIDE_FACTUAL_INFO",
             can_recommend_medication=False,
+            clarification_questions=None,
         )

@@ -3,6 +3,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.modules.agent.tools.base import BaseTool
 from app.modules.agent.tools.user.medicines import SearchMedicinesTool, GetMedicineDetailsTool, CheckMedicineStockTool
 from app.modules.agent.tools.user.clinical import AssessSymptomSafetyTool
+from app.modules.agent.tools.user.clarification import RequestClarificationTool
 from app.modules.agent.tools.user.doctors import SearchDoctorsTool, GetDoctorDetailsTool
 from app.modules.agent.tools.user.account import GetMyProfileTool, GetMyOrdersTool, GetMyAppointmentsTool
 
@@ -29,6 +30,7 @@ class ToolRegistry:
     def _register_default_tools(self):
         # 1. Clinical Triage & Safe Catalog Tools (USER, DOCTOR, NURSE, ADMIN)
         self.register(AssessSymptomSafetyTool(self.db))
+        self.register(RequestClarificationTool(self.db))
         self.register(SearchMedicinesTool(self.db))
         self.register(GetMedicineDetailsTool(self.db))
         self.register(CheckMedicineStockTool(self.db))

@@ -2,13 +2,15 @@ from typing import AsyncGenerator, List, Dict, Any, Optional
 import json
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.modules.agent.schemas.chat import SessionType, ChatRequest
+from app.modules.agent.schemas.clarification import ClarificationSubmissionRequest
+from app.modules.agent.security.clarifications import AgentClarificationRepository
 from app.modules.agent.memory.repository import AgentMemoryRepository
 from app.modules.agent.memory.session import SessionMemoryManager
 from app.modules.agent.tools.registry import ToolRegistry
 from app.modules.agent.security.audit import AgentAuditService
 from app.modules.agent.llm.service import LLMService
 from app.modules.agent.orchestrator import AgentOrchestrator
-from app.core.exceptions import ForbiddenException, NotFoundException
+from app.core.exceptions import ForbiddenException, NotFoundException, BadRequestException
 
 class AgentChatService:
     """High-level service coordinating memory, permissions, orchestrator, and stream generation."""
@@ -19,6 +21,7 @@ class AgentChatService:
         self.memory = SessionMemoryManager(self.repo)
         self.registry = ToolRegistry(db)
         self.audit = AgentAuditService(db)
+        self.clarif_repo = AgentClarificationRepository(db)
         self.llm_service = LLMService()
         self.orchestrator = AgentOrchestrator(
             llm=self.llm_service.get_provider(),
@@ -41,7 +44,7 @@ class AgentChatService:
             session = await self.repo.get_session(session_id)
             if not session:
                 raise NotFoundException(f"Chat session '{session_id}' not found.")
-            if session.get("user_id") != user_id:
+            if session.get("user_id") != user_id and user_role not in ["ADMIN", "DEVELOPER"]:
                 raise ForbiddenException("Access denied: You do not own this chat session.")
             return session
 
@@ -87,6 +90,91 @@ class AgentChatService:
             user_message=req.message,
             conversation_history=history,
             confirmation_token=req.confirmation_token,
+        ):
+            event_name = event.get("event", "message")
+            data = event.get("data", {})
+            if event_name == "done":
+                assistant_full_content = data.get("full_content", "")
+
+            yield f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+
+        # Persist Assistant Response
+        if assistant_full_content:
+            await self.repo.add_message(
+                session_id=session_id,
+                user_id=user_id,
+                role="assistant",
+                content=assistant_full_content,
+            )
+
+    async def stream_clarification_submission(
+        self,
+        session_id: str,
+        clarification_id: str,
+        submission: ClarificationSubmissionRequest,
+        user_id: str,
+        user_role: str,
+        explicit_session_type: Optional[SessionType] = None,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Validates clarification answers, records them into history, and starts the next agent turn.
+        """
+        session = await self.get_or_create_session(
+            session_id=session_id,
+            user_id=user_id,
+            user_role=user_role,
+            first_message="",
+            explicit_session_type=explicit_session_type,
+        )
+        session_type = SessionType(session["session_type"])
+
+        # Validate and consume pending clarification
+        is_valid, err_msg, updated_doc = await self.clarif_repo.validate_and_consume_clarification(
+            clarification_id=clarification_id,
+            user_id=user_id,
+            session_id=session_id,
+            submitted_answers=[a.model_dump() for a in submission.answers],
+        )
+
+        if not is_valid or not updated_doc:
+            if "Access denied" in (err_msg or ""):
+                raise ForbiddenException(err_msg or "Access denied to clarification.")
+            raise BadRequestException(err_msg or "Invalid clarification submission.")
+
+        # Build formatted human-readable answer message
+        answer_lines = []
+        for a in updated_doc.get("answers", []):
+            val = a.get("value")
+            val_formatted = ", ".join(val) if isinstance(val, list) else str(val)
+            answer_lines.append(f"• **{a.get('question')}**: {val_formatted}")
+
+        user_answer_text = "Here are the answers to your questions:\n" + "\n".join(answer_lines)
+
+        # Persist User Answer Message into Session
+        await self.repo.add_message(
+            session_id=session_id,
+            user_id=user_id,
+            role="user",
+            content=user_answer_text,
+            tool_results_metadata={
+                "clarification_id": clarification_id,
+                "answers": updated_doc.get("answers"),
+            },
+        )
+
+        # Emit initial session metadata event
+        yield f"event: session\ndata: {json.dumps({'session_id': session_id, 'title': session.get('title')}, default=str)}\n\n"
+
+        history = await self.memory.get_recent_messages_for_llm(session_id=session_id, window_size=8)
+
+        assistant_full_content = ""
+        async for event in self.orchestrator.execute_turn_stream(
+            session_id=session_id,
+            user_id=user_id,
+            user_role=user_role,
+            session_type=session_type,
+            user_message=user_answer_text,
+            conversation_history=history,
         ):
             event_name = event.get("event", "message")
             data = event.get("data", {})

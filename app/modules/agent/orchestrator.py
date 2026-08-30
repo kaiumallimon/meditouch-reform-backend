@@ -183,6 +183,27 @@ class AgentOrchestrator:
                             status = tool_res.status
                             res_data = tool_res.result or {"error": tool_res.error_message}
 
+                            # Emit Clarification Required Event (Strictly terminal for this turn!)
+                            if tool_res.requires_clarification or status == ToolExecutionStatus.CLARIFICATION_REQUIRED:
+                                clarif_data = tool_res.clarification_payload or (res_data if isinstance(res_data, dict) else {})
+                                yield {
+                                    "event": StreamEventType.CLARIFICATION_REQUIRED.value,
+                                    "data": clarif_data,
+                                }
+                                state.transition(AgentState.COMPLETE)
+                                yield {"event": StreamEventType.STATE.value, "data": {"state": AgentState.COMPLETE.value}}
+                                yield {
+                                    "event": StreamEventType.DONE.value,
+                                    "data": {
+                                        "finish_reason": "clarification_required",
+                                        "full_content": clarif_data.get("message", "Clarification requested."),
+                                        "model_name": active_model_tag,
+                                        "clarification": clarif_data,
+                                    },
+                                }
+                                # STOP EXECUTION IMMEDIATELY. Never ask and answer in the same turn!
+                                return
+
                             # Emit Specialized Visual Cards if medicine catalog results
                             if tool_name == "search_medicines" and isinstance(res_data, dict):
                                 meds = res_data.get("medicines") or []

@@ -3,13 +3,15 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.modules.agent.tools.base import BaseTool
 from app.modules.agent.schemas.tools import ToolExecutionStatus, ToolResult
 from app.modules.agent.schemas.capabilities import ToolCapability
-from app.modules.agent.security.medical_safety import MedicalSafetyPolicy
+from app.modules.agent.security.medical_safety import MedicalSafetyPolicy, TriageStatus
+from app.modules.agent.security.clarifications import AgentClarificationRepository
 from app.common.enums import UserRole
 
 class AssessSymptomSafetyTool(BaseTool):
     """
     Evaluates symptoms for medical safety, emergency red flags, and triage level.
     Strictly clinical screening only - DOES NOT prescribe or recommend medications.
+    If information is insufficient, initiates structured clarification and halts.
     """
 
     name = "assess_symptom_safety"
@@ -61,6 +63,47 @@ class AssessSymptomSafetyTool(BaseTool):
             )
 
         assessment = MedicalSafetyPolicy.assess_symptoms(symptoms_text)
+
+        # If clarification is required for vague symptoms, persist state and mark terminal clarification
+        if assessment.status == TriageStatus.INSUFFICIENT_INFORMATION and assessment.clarification_questions:
+            clarif_id = "clarif_sim"
+            if self.db is not None:
+                repo = AgentClarificationRepository(self.db)
+                clarif_id = await repo.create_pending_clarification(
+                    user_id=caller_id,
+                    session_id=session_id,
+                    message=assessment.guidance,
+                    questions=assessment.clarification_questions,
+                )
+
+            return ToolResult(
+                tool_call_id="",
+                name=self.name,
+                status=ToolExecutionStatus.CLARIFICATION_REQUIRED,
+                result={
+                    "status": assessment.status.value,
+                    "guidance": assessment.guidance,
+                    "clarification_id": clarif_id,
+                    "questions": assessment.clarification_questions,
+                },
+                requires_clarification=True,
+                clarification_id=clarif_id,
+                clarification_payload={
+                    "clarification_id": clarif_id,
+                    "message": assessment.guidance,
+                    "questions": assessment.clarification_questions,
+                    "submission": {
+                        "action": "submit_clarification",
+                        "session_id": session_id,
+                        "clarification_id": clarif_id,
+                    },
+                },
+                metadata={
+                    "action": "ASSESS_SYMPTOM_SAFETY",
+                    "triage_status": assessment.status.value,
+                    "is_emergency": False,
+                },
+            )
 
         return ToolResult(
             tool_call_id="",

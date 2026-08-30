@@ -29,6 +29,7 @@ class StreamEventType(str, Enum):
     TOKEN = "token"
     CONFIRMATION_REQUIRED = "confirmation_required"
     CONFIRMATION_RESULT = "confirmation_result"
+    CLARIFICATION_REQUIRED = "clarification_required"
     ERROR = "error"
     DONE = "done"
 
