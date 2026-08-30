@@ -126,3 +126,4 @@ class RequestClarificationTool(BaseTool):
             clarification_payload=payload,
             metadata={"action": "REQUEST_CLARIFICATION", "question_count": len(questions)},
         )
+

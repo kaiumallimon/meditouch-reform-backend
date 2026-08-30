@@ -232,3 +232,4 @@ async def test_factual_queries_bypass_clarification():
     res2 = MedicalSafetyPolicy.assess_symptoms("What is the price of Napa Extra?")
     assert res2.status == TriageStatus.GENERAL_INFORMATION
     assert res2.clarification_questions is None
+

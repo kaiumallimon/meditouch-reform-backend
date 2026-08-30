@@ -52,3 +52,4 @@ class ClarificationAnswer(BaseModel):
 
 class ClarificationSubmissionRequest(BaseModel):
     answers: List[ClarificationAnswer]
+
