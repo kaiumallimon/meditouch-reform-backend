@@ -202,7 +202,7 @@ class AgentOrchestrator:
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "name": tool_name,
-                        "content": json.dumps(res_data, ensure_ascii=False),
+                        "content": json.dumps(res_data, ensure_ascii=False, default=str),
                     })
 
                 # Loop continues back to LLM with tool results in context!

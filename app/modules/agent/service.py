@@ -65,9 +65,9 @@ class AgentChatService:
 
         # Emit initial session metadata event
         import json
-        yield f"event: session\ndata: {json.dumps({'session_id': session_id, 'title': session.get('title')})}\n\n"
+        yield f"event: session\ndata: {json.dumps({'session_id': session_id, 'title': session.get('title')}, default=str)}\n\n"
 
-        history = await self.memory.get_recent_messages_for_llm(session_id=session_id, window_size=12)
+        history = await self.memory.get_recent_messages_for_llm(session_id=session_id, window_size=6)
 
         assistant_full_content = ""
         async for event in self.orchestrator.execute_turn_stream(
@@ -84,7 +84,7 @@ class AgentChatService:
             if event_name == "done":
                 assistant_full_content = data.get("full_content", "")
 
-            yield f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+            yield f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
 
         # Persist Assistant Response
         if assistant_full_content:
