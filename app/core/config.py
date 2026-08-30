@@ -95,8 +95,8 @@ class Settings(BaseSettings):
     TOKENROUTER_BASE_URL: str = Field(default="https://api.tokenrouter.com/v1")
     TOKENROUTER_MODEL: str = Field(default="z-ai/glm-5.3-free")
 
-    # Provider fallback priority order (comma-separated: groq,openrouter,tokenrouter)
-    LLM_PROVIDER_ORDER: str = Field(default="groq,openrouter,tokenrouter")
+    # Provider fallback priority order (comma-separated: groq,tokenrouter)
+    LLM_PROVIDER_ORDER: str = Field(default="groq,tokenrouter")
 
     model_config = SettingsConfigDict(
         env_file=".env",
