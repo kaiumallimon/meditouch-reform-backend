@@ -121,6 +121,13 @@ async def create_db_indexes(db: AsyncIOMotorDatabase) -> None:
             IndexModel([("user_id", ASCENDING)], name="idx_agent_clarifications_user"),
             IndexModel([("expires_at", ASCENDING)], name="idx_agent_clarifications_expires"),
         ])
+        await db.agent_task_context.create_indexes([
+            IndexModel([("task_id", ASCENDING)], unique=True, name="idx_task_ctx_task_id_unique"),
+            IndexModel([("session_id", ASCENDING), ("status", ASCENDING)], name="idx_task_ctx_session_status"),
+            IndexModel([("user_id", ASCENDING), ("status", ASCENDING)], name="idx_task_ctx_user_status"),
+            IndexModel([("clarification_id", ASCENDING)], name="idx_task_ctx_clarification"),
+            IndexModel([("expires_at", ASCENDING)], name="idx_task_ctx_expires"),
+        ])
         await db.chat_sessions.create_indexes([
             IndexModel([("id", ASCENDING)], unique=True, name="idx_chat_sessions_id_unique"),
             IndexModel([("user_id", ASCENDING), ("is_archived", ASCENDING)], name="idx_chat_sessions_user"),

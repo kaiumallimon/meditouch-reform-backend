@@ -1,5 +1,6 @@
 import json
 import time
+import hashlib
 from typing import AsyncGenerator, List, Dict, Any, Optional
 from app.modules.agent.schemas.chat import AgentState, StreamEventType, SessionType
 from app.modules.agent.schemas.tools import ToolExecutionStatus
@@ -16,12 +17,29 @@ MAX_AGENT_STEPS = 8
 MAX_TOOL_CALLS = 12
 MAX_EXECUTION_TIME_SECONDS = 35.0
 MAX_TOOL_RESULT_STRING_LENGTH = 4000
+MAX_SAME_TOOL_RETRIES = 2   # max times the same tool+args can be called before being short-circuited
+
+
+def _args_hash(tool_name: str, args: Dict[str, Any]) -> str:
+    """Stable hash of tool_name + normalized arguments for dedup detection."""
+    normalized = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.md5(f"{tool_name}:{normalized}".encode()).hexdigest()
+
 
 class AgentOrchestrator:
     """
     Autonomous ReAct loop planner and executor.
     Manages multi-turn tool execution, state transitions, runtime security checks,
     and real-time SSE stream events.
+
+    Key invariants:
+    - Tool dedup cache: identical (tool_name, args) calls return cached result without re-execution.
+    - MAX_SAME_TOOL_RETRIES: hard cap on same-tool retry loops.
+    - Task context injection: if task_context_injection is provided, it is prepended as a
+      priority system message after the base system prompt, BEFORE conversation history.
+      This allows continuation runs to always see the original intent.
+    - Clarification terminal state: when any tool returns CLARIFICATION_REQUIRED,
+      the turn terminates immediately — no LLM calls, tool calls, or text streaming afterward.
     """
 
     def __init__(
@@ -43,6 +61,8 @@ class AgentOrchestrator:
         user_message: str,
         conversation_history: List[Dict[str, Any]],
         confirmation_token: Optional[str] = None,
+        task_context_injection: Optional[str] = None,
+        task_context: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         state = AgentExecutionState(
             session_id=session_id,
@@ -50,6 +70,11 @@ class AgentOrchestrator:
             user_role=user_role,
             session_type=session_type,
         )
+
+        # Per-run tool result cache: {args_hash → (result_data, status)}
+        _tool_result_cache: Dict[str, Any] = {}
+        # Per-run same-tool retry counter: {args_hash → call_count}
+        _tool_retry_counter: Dict[str, int] = {}
 
         # 1. State: RECEIVED
         yield {"event": StreamEventType.STATE.value, "data": {"state": AgentState.RECEIVED.value}}
@@ -64,7 +89,18 @@ class AgentOrchestrator:
         tools_for_context = self.registry.get_schemas_for_context(user_role, session_type)
 
         # 3. Assemble Messages Envelope
+        # System prompt is always first
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+
+        # Task context injection: injected as a SECOND system message immediately after the base
+        # system prompt. This ensures the LLM reads the original intent, primary complaint, and
+        # all collected clinical context BEFORE the conversation history.
+        if task_context_injection:
+            messages.append({
+                "role": "system",
+                "content": task_context_injection,
+            })
+
         messages.extend(conversation_history)
         messages.append({"role": "user", "content": user_message})
 
@@ -154,6 +190,41 @@ class AgentOrchestrator:
                     except Exception:
                         args = {}
 
+                    # ── Duplicate Tool Call Deduplication ────────────────────────
+                    call_hash = _args_hash(tool_name, args)
+                    retry_count = _tool_retry_counter.get(call_hash, 0)
+
+                    if call_hash in _tool_result_cache and retry_count >= MAX_SAME_TOOL_RETRIES:
+                        # Hard cap reached — reuse cached result without re-executing
+                        logger.warning(
+                            f"[Dedup] Tool '{tool_name}' called with identical args {retry_count + 1} times — "
+                            f"reusing cached result for session {session_id}"
+                        )
+                        cached_res_data, cached_status = _tool_result_cache[call_hash]
+
+                        yield {
+                            "event": StreamEventType.TOOL_CALL.value,
+                            "data": {"tool": tool_name, "arguments": args, "tool_call_id": tool_call_id, "cached": True},
+                        }
+                        yield {
+                            "event": StreamEventType.TOOL_RESULT.value,
+                            "data": {"tool": tool_name, "status": cached_status.value, "result": cached_res_data, "cached": True},
+                        }
+
+                        sanitized_content = json.dumps(cached_res_data, ensure_ascii=False, default=str)
+                        if len(sanitized_content) > MAX_TOOL_RESULT_STRING_LENGTH:
+                            sanitized_content = sanitized_content[:MAX_TOOL_RESULT_STRING_LENGTH] + "... [TRUNCATED_OUTPUT]"
+
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "name": tool_name,
+                            "content": f"[CACHED RESULT — tool was already called with identical arguments]\n{sanitized_content}",
+                        })
+                        continue
+
+                    _tool_retry_counter[call_hash] = retry_count + 1
+
                     # Emit Tool Start Event
                     yield {
                         "event": StreamEventType.TOOL_CALL.value,
@@ -179,11 +250,18 @@ class AgentOrchestrator:
                                 caller_role=user_role,
                                 session_id=session_id,
                                 confirmation_token=confirmation_token,
+                                # Inject task_context so tools like AssessSymptomSafetyTool
+                                # can access original_request and primary_complaint
+                                **({"task_context": task_context} if task_context else {}),
                             )
                             status = tool_res.status
                             res_data = tool_res.result or {"error": tool_res.error_message}
 
-                            # Emit Clarification Required Event (Strictly terminal for this turn!)
+                            # Cache successful results for dedup
+                            if status not in (ToolExecutionStatus.ERROR, ToolExecutionStatus.PERMISSION_DENIED):
+                                _tool_result_cache[call_hash] = (res_data, status)
+
+                            # ── Clarification Required — TERMINAL STATE ───────────
                             if tool_res.requires_clarification or status == ToolExecutionStatus.CLARIFICATION_REQUIRED:
                                 clarif_data = tool_res.clarification_payload or (res_data if isinstance(res_data, dict) else {})
                                 yield {
@@ -196,12 +274,12 @@ class AgentOrchestrator:
                                     "event": StreamEventType.DONE.value,
                                     "data": {
                                         "finish_reason": "clarification_required",
-                                        "full_content": clarif_data.get("message", "Clarification requested."),
+                                        "full_content": "",  # No text content — clarification card is the response
                                         "model_name": active_model_tag,
                                         "clarification": clarif_data,
                                     },
                                 }
-                                # STOP EXECUTION IMMEDIATELY. Never ask and answer in the same turn!
+                                # STOP IMMEDIATELY. Never ask and answer in the same turn!
                                 return
 
                             # Emit Specialized Visual Cards if medicine catalog results

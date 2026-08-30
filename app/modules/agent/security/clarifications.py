@@ -15,6 +15,14 @@ class AgentClarificationRepository:
     MongoDB-persisted repository for interactive clarification questions.
     Guarantees atomic, single-use, user-bound, and session-bound validation
     that survives serverless / Vercel restarts.
+
+    Each clarification record now stores:
+      - original_message: the user's verbatim original request
+      - primary_complaint: the identified primary symptom/intent
+      - clinical_context: partial clinical context snapshot at time of creation
+
+    These fields are returned when the clarification is consumed so that the
+    next agent turn can be initialized with the ORIGINAL intent, not the answers alone.
     """
 
     def __init__(self, db: AsyncIOMotorDatabase):
@@ -28,7 +36,14 @@ class AgentClarificationRepository:
         message: str,
         questions: List[Dict[str, Any]],
         ttl_seconds: int = DEFAULT_CLARIFICATION_TTL_SECONDS,
+        # Intent preservation fields
+        original_message: Optional[str] = None,
+        primary_complaint: Optional[str] = None,
+        clinical_context: Optional[Dict[str, Any]] = None,
+        task_id: Optional[str] = None,
+        intent_type: Optional[str] = None,
     ) -> str:
+        """Creates a pending clarification record with full intent context."""
         # Enforce question limit
         bounded_questions = questions[:MAX_QUESTIONS_PER_CLARIFICATION]
         # Enforce option limit per question
@@ -51,10 +66,21 @@ class AgentClarificationRepository:
             "created_at": now.isoformat(),
             "expires_at": expires_at.isoformat(),
             "submitted_at": None,
+            # Intent preservation — critical for correct clarification continuation
+            "original_message": original_message or message,
+            "primary_complaint": primary_complaint,
+            "clinical_context": clinical_context or {},
+            "task_id": task_id,
+            "intent_type": intent_type or "symptom_medication_request",
         }
 
         await self.collection.insert_one(doc)
-        logger.info(f"Agent Clarification created: [{clarification_id}] for user {user_id} in session {session_id} with {len(bounded_questions)} questions")
+        logger.info(
+            f"Agent Clarification created: [{clarification_id}] for user {user_id} "
+            f"in session {session_id} with {len(bounded_questions)} questions "
+            f"(original_message={'set' if original_message else 'missing'}, "
+            f"primary_complaint={primary_complaint})"
+        )
         return clarification_id
 
     async def get_pending_clarification(self, clarification_id: str) -> Optional[Dict[str, Any]]:
@@ -69,6 +95,8 @@ class AgentClarificationRepository:
     ) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
         """
         Validates user submission against schema constraints and atomically marks clarification SUBMITTED.
+        Returns (is_valid, error_message, updated_doc).
+        updated_doc includes original_message, primary_complaint, clinical_context for intent restoration.
         """
         doc = await self.collection.find_one({"id": clarification_id})
         if not doc:
@@ -188,4 +216,3 @@ class AgentClarificationRepository:
             return False, "Failed to submit clarification: state has changed or already submitted.", None
 
         return True, None, updated_doc
-

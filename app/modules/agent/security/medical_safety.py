@@ -18,6 +18,7 @@ class TriageAssessment(BaseModel):
     recommended_action: str
     can_recommend_medication: bool = False
     clarification_questions: Optional[List[Dict[str, Any]]] = None
+    primary_complaint: Optional[str] = None
 
 
 # Deterministic emergency regex patterns / red flags
@@ -26,7 +27,7 @@ EMERGENCY_PATTERNS: Dict[str, List[str]] = {
         r"difficult(y)?\s+(in\s+)?breath(ing)?",
         r"short(ness)?\s+of\s+breath",
         r"trouble\s+breath(ing)?",
-        r"can(')?t\s+breathe?",
+        r"can(')?\s*t\s+breathe?",
         r"cannot\s+breathe?",
         r"struggling\s+to\s+breathe?",
         r"stridor",
@@ -89,6 +90,293 @@ URGENT_REVIEW_PATTERNS: List[str] = [
     r"dehydration\s+in\s+infant",
 ]
 
+# ─── Symptom classification keyword lists ─────────────────────────────────────
+COUGH_KEYWORDS = ["cough", "coughing", "whooping cough"]
+FEVER_KEYWORDS = ["fever", "high temperature", "febrile"]
+HEADACHE_KEYWORDS = ["headache", "head pain", "migraine", "head ache"]
+ALLERGY_KEYWORDS = ["allergy", "allergic", "rash", "itching", "itchy", "hives"]
+STOMACH_KEYWORDS = ["stomach ache", "stomach pain", "nausea", "vomit", "diarrhea", "diarrhoea", "indigestion", "stomach upset"]
+THROAT_KEYWORDS = ["sore throat", "throat pain", "throat infection", "strep"]
+
+VAGUE_INTENT_PATTERNS = [
+    r"what should i take",
+    r"what to take",
+    r"what medicine",
+    r"suggest medicine",
+    r"recommend medicine",
+    r"give me something for",
+    r"cure my",
+    r"treat my",
+    r"medicine for",
+    r"tablet for",
+    r"drug for",
+    r"syrup for",
+]
+
+# ─── Suspicious temperature pattern — catches "100C", "50°C", "42c" etc ──────
+SUSPICIOUS_TEMP_CELSIUS = re.compile(
+    r"\b([4-9][0-9]|[1-9][0-9]{2,})\s*[°]?\s*c\b",
+    re.IGNORECASE,
+)
+
+
+def _build_cough_questions() -> List[Dict[str, Any]]:
+    return [
+        {
+            "id": "duration",
+            "type": "single_select",
+            "question": "How long have you had this cough?",
+            "required": True,
+            "options": [
+                {"id": "less_than_3_days", "label": "Less than 3 days"},
+                {"id": "3_to_7_days", "label": "3–7 days"},
+                {"id": "week_plus", "label": "More than a week"},
+                {"id": "chronic", "label": "More than a month (chronic)"},
+            ],
+        },
+        {
+            "id": "cough_type",
+            "type": "single_select",
+            "question": "Is the cough dry or productive (with mucus/phlegm)?",
+            "required": True,
+            "options": [
+                {"id": "dry", "label": "Dry (no mucus)"},
+                {"id": "productive", "label": "Productive (with mucus)"},
+                {"id": "barking", "label": "Barking / harsh sound"},
+                {"id": "not_sure", "label": "Not sure"},
+            ],
+        },
+        {
+            "id": "severity",
+            "type": "single_select",
+            "question": "How severe is the cough?",
+            "required": True,
+            "options": [
+                {"id": "mild", "label": "Mild (occasional)"},
+                {"id": "moderate", "label": "Moderate (frequent, affects activity)"},
+                {"id": "severe", "label": "Severe (constant, very disruptive)"},
+            ],
+        },
+        {
+            "id": "associated_symptoms",
+            "type": "multi_select",
+            "question": "Do you have any of these along with the cough?",
+            "required": False,
+            "options": [
+                {"id": "fever", "label": "Fever"},
+                {"id": "runny_nose", "label": "Runny or blocked nose"},
+                {"id": "sore_throat", "label": "Sore throat"},
+                {"id": "chest_pain", "label": "Chest pain"},
+                {"id": "shortness_of_breath", "label": "Shortness of breath"},
+                {"id": "none", "label": "None of the above"},
+            ],
+            "allow_custom_input": False,
+        },
+        {
+            "id": "known_allergies",
+            "type": "text",
+            "question": "Do you have any known allergies? (medicines, dust, food, etc.) — type 'none' if not applicable",
+            "required": False,
+            "placeholder": "e.g. penicillin, dust, pollen",
+            "allow_custom_input": True,
+        },
+    ]
+
+
+def _build_fever_questions() -> List[Dict[str, Any]]:
+    return [
+        {
+            "id": "temperature",
+            "type": "text",
+            "question": "What is your temperature? (Please specify the unit — e.g. '38.5°C' or '101°F')",
+            "required": False,
+            "placeholder": "e.g. 38.5°C or 101°F",
+            "allow_custom_input": True,
+        },
+        {
+            "id": "duration",
+            "type": "single_select",
+            "question": "How long have you had the fever?",
+            "required": True,
+            "options": [
+                {"id": "today", "label": "Started today"},
+                {"id": "1_to_3_days", "label": "1–3 days"},
+                {"id": "more_than_3_days", "label": "More than 3 days"},
+            ],
+        },
+        {
+            "id": "associated_symptoms",
+            "type": "multi_select",
+            "question": "Any other symptoms along with the fever?",
+            "required": False,
+            "options": [
+                {"id": "chills", "label": "Chills / shivering"},
+                {"id": "body_ache", "label": "Body aches"},
+                {"id": "headache", "label": "Headache"},
+                {"id": "cough", "label": "Cough"},
+                {"id": "rash", "label": "Skin rash"},
+                {"id": "none", "label": "None of the above"},
+            ],
+        },
+        {
+            "id": "medication_taken",
+            "type": "single_select",
+            "question": "Have you taken any medicine for the fever?",
+            "required": False,
+            "options": [
+                {"id": "none", "label": "No"},
+                {"id": "paracetamol", "label": "Yes — Paracetamol / Napa"},
+                {"id": "ibuprofen", "label": "Yes — Ibuprofen / Nurofen"},
+                {"id": "other", "label": "Yes — other medicine"},
+            ],
+        },
+    ]
+
+
+def _build_headache_questions() -> List[Dict[str, Any]]:
+    return [
+        {
+            "id": "severity",
+            "type": "single_select",
+            "question": "How severe is the headache?",
+            "required": True,
+            "options": [
+                {"id": "mild", "label": "Mild (bearable)"},
+                {"id": "moderate", "label": "Moderate (distracting)"},
+                {"id": "severe", "label": "Severe (debilitating)"},
+            ],
+        },
+        {
+            "id": "duration",
+            "type": "single_select",
+            "question": "How long have you had the headache?",
+            "required": True,
+            "options": [
+                {"id": "less_than_hour", "label": "Less than an hour"},
+                {"id": "few_hours", "label": "A few hours"},
+                {"id": "today", "label": "All day"},
+                {"id": "multi_day", "label": "More than a day"},
+            ],
+        },
+        {
+            "id": "location",
+            "type": "single_select",
+            "question": "Where is the headache located?",
+            "required": False,
+            "options": [
+                {"id": "forehead", "label": "Forehead / front"},
+                {"id": "temples", "label": "Temples (sides)"},
+                {"id": "back_of_head", "label": "Back of head"},
+                {"id": "behind_eyes", "label": "Behind the eyes"},
+                {"id": "whole_head", "label": "Entire head"},
+                {"id": "one_side", "label": "One side only"},
+            ],
+        },
+        {
+            "id": "migraine_history",
+            "type": "boolean",
+            "question": "Have you been previously diagnosed with migraines?",
+            "required": False,
+        },
+    ]
+
+
+def _build_allergy_questions() -> List[Dict[str, Any]]:
+    return [
+        {
+            "id": "symptoms",
+            "type": "multi_select",
+            "question": "What symptoms are you experiencing?",
+            "required": True,
+            "options": [
+                {"id": "sneezing", "label": "Sneezing or runny nose"},
+                {"id": "itchy_eyes", "label": "Itchy or watery eyes"},
+                {"id": "hives", "label": "Hives or skin itching"},
+                {"id": "swelling", "label": "Swelling (face / lips / throat)"},
+                {"id": "breathing_difficulty", "label": "Difficulty breathing"},
+                {"id": "other", "label": "Other symptoms"},
+            ],
+            "allow_custom_input": True,
+        },
+        {
+            "id": "duration",
+            "type": "single_select",
+            "question": "How long have you had these symptoms?",
+            "required": True,
+            "options": [
+                {"id": "today", "label": "Started today"},
+                {"id": "few_days", "label": "A few days (2–5 days)"},
+                {"id": "week_plus", "label": "More than a week"},
+            ],
+        },
+        {
+            "id": "medication_taken",
+            "type": "single_select",
+            "question": "Have you already taken anything for it?",
+            "required": False,
+            "options": [
+                {"id": "none", "label": "No"},
+                {"id": "antihistamine", "label": "Yes (Antihistamine / Allergy pill)"},
+                {"id": "other_med", "label": "Yes (Other medicine)"},
+            ],
+        },
+    ]
+
+
+def _build_general_questions() -> List[Dict[str, Any]]:
+    return [
+        {
+            "id": "symptoms_detail",
+            "type": "text",
+            "question": "Please describe your specific symptoms (location, severity, when they started):",
+            "required": True,
+            "placeholder": "e.g. Headache on forehead, mild fever since yesterday",
+            "allow_custom_input": True,
+        },
+        {
+            "id": "duration",
+            "type": "single_select",
+            "question": "How long have you been experiencing this?",
+            "required": True,
+            "options": [
+                {"id": "today", "label": "Started today"},
+                {"id": "few_days", "label": "A few days"},
+                {"id": "week_plus", "label": "More than a week"},
+            ],
+        },
+    ]
+
+
+def _classify_primary_symptom(text: str) -> Optional[str]:
+    """
+    Identifies the primary symptom from user text using keyword matching.
+    Returns the most specific match or None.
+    """
+    for kw in COUGH_KEYWORDS:
+        if kw in text:
+            return "cough"
+    for kw in FEVER_KEYWORDS:
+        if kw in text:
+            return "fever"
+    for kw in HEADACHE_KEYWORDS:
+        if kw in text:
+            return "headache"
+    for kw in ALLERGY_KEYWORDS:
+        if kw in text:
+            return "allergy"
+    for kw in THROAT_KEYWORDS:
+        if kw in text:
+            return "sore throat"
+    for kw in STOMACH_KEYWORDS:
+        if kw in text:
+            return "stomach ache"
+    return None
+
+
+def _suspicious_temperature_detected(text: str) -> bool:
+    """Returns True if the text contains a temperature that looks like dangerous Celsius units."""
+    return bool(SUSPICIOUS_TEMP_CELSIUS.search(text))
+
 
 class MedicalSafetyPolicy:
     """
@@ -98,11 +386,50 @@ class MedicalSafetyPolicy:
     """
 
     @staticmethod
-    def assess_symptoms(user_text: str) -> TriageAssessment:
+    def assess_symptoms(
+        user_text: str,
+        clinical_context: Optional[Dict[str, Any]] = None,
+    ) -> TriageAssessment:
+        """
+        Assesses user-reported symptoms for emergency flags, clarification need, or factual info.
+
+        Args:
+            user_text: The user's current message or original request.
+            clinical_context: Optional existing ClinicalContext dict from a prior turn.
+                              If provided, it informs which questions have already been answered.
+        """
         normalized = user_text.lower().strip()
         matched_emergencies: List[str] = []
 
-        # 1. Screen for Emergency Red Flags
+        # 1. Suspicious temperature unit check (e.g. "100C")
+        if _suspicious_temperature_detected(normalized):
+            return TriageAssessment(
+                status=TriageStatus.INSUFFICIENT_INFORMATION,
+                is_emergency=False,
+                emergency_indicators_found=[],
+                guidance=(
+                    "⚠️ I noticed a temperature value that may have an unusual unit. "
+                    "Please clarify your temperature and unit."
+                ),
+                recommended_action="CLARIFY_TEMPERATURE_UNIT",
+                can_recommend_medication=False,
+                primary_complaint="temperature",
+                clarification_questions=[
+                    {
+                        "id": "temperature_clarification",
+                        "type": "text",
+                        "question": (
+                            "You mentioned a temperature — did you mean it in Fahrenheit (°F) or Celsius (°C)? "
+                            "Please re-enter (e.g. '101°F' or '38.5°C'):"
+                        ),
+                        "required": True,
+                        "placeholder": "e.g. 101°F or 38.5°C",
+                        "allow_custom_input": True,
+                    }
+                ],
+            )
+
+        # 2. Screen for Emergency Red Flags
         for category, patterns in EMERGENCY_PATTERNS.items():
             for pat in patterns:
                 m = re.search(pat, normalized)
@@ -128,7 +455,7 @@ class MedicalSafetyPolicy:
                 clarification_questions=None,
             )
 
-        # 2. Screen for Urgent Medical Review Flags
+        # 3. Screen for Urgent Medical Review Flags
         matched_urgent: List[str] = []
         for pat in URGENT_REVIEW_PATTERNS:
             if re.search(pat, normalized):
@@ -149,99 +476,88 @@ class MedicalSafetyPolicy:
                 clarification_questions=None,
             )
 
-        # 3. Check for general / vague symptom queries
-        is_allergy_query = any(w in normalized for w in ["allergy", "allergic", "rash", "itching", "itchy", "hives"])
-        is_vague_symptom_query = is_allergy_query or any(
-            w in normalized
-            for w in [
-                "what should i take",
-                "what to take",
-                "what medicine",
-                "suggest medicine",
-                "recommend medicine",
-                "give me something for",
-                "cure my",
-                "treat my",
-                "have fever",
-                "have headache",
-                "pain in",
-                "cough",
-                "sore throat",
-            ]
-        )
+        # 4. Factual medicine lookup — no clarification needed
+        is_factual_lookup = any(w in normalized for w in [
+            "what is", "details of", "price of", "cost of", "how much is",
+            "find napa", "find paracetamol", "cetirizine", "amoxicillin",
+            "mg tablet", "mg capsule", "syrup",
+        ])
+        # Pure medicine name queries → pass through without clarification
+        is_medicine_specific = bool(re.search(r"\b(napa|paracetamol|cetirizine|omeprazole|metformin|amoxicillin|azithromycin|fexofenadine|montelukast|ibuprofen|naproxen)\b", normalized))
 
-        if is_vague_symptom_query:
-            questions = []
-            if is_allergy_query:
-                questions = [
-                    {
-                        "id": "symptoms",
-                        "type": "multi_select",
-                        "question": "What symptoms are you experiencing?",
-                        "required": True,
-                        "options": [
-                            {"id": "sneezing", "label": "Sneezing or runny nose"},
-                            {"id": "itchy_eyes", "label": "Itchy or watery eyes"},
-                            {"id": "hives", "label": "Hives or skin itching"},
-                            {"id": "swelling", "label": "Swelling (face / lips / throat)"},
-                            {"id": "breathing_difficulty", "label": "Difficulty breathing"},
-                            {"id": "other", "label": "Other symptoms"},
-                        ],
-                        "allow_custom_input": True,
-                    },
-                    {
-                        "id": "duration",
-                        "type": "single_select",
-                        "question": "How long have you had these symptoms?",
-                        "required": True,
-                        "options": [
-                            {"id": "today", "label": "Started today"},
-                            {"id": "few_days", "label": "A few days (2-5 days)"},
-                            {"id": "week_plus", "label": "More than a week"},
-                        ],
-                    },
-                    {
-                        "id": "medication_taken",
-                        "type": "single_select",
-                        "question": "Have you already taken anything for it?",
-                        "required": False,
-                        "options": [
-                            {"id": "none", "label": "No"},
-                            {"id": "antihistamine", "label": "Yes (Antihistamine / Allergy pill)"},
-                            {"id": "other_med", "label": "Yes (Other medicine)"},
-                        ],
-                    },
-                ]
+        if is_factual_lookup or is_medicine_specific:
+            return TriageAssessment(
+                status=TriageStatus.GENERAL_INFORMATION,
+                is_emergency=False,
+                emergency_indicators_found=[],
+                guidance="Provide safe, factual medical and health information from verified sources.",
+                recommended_action="PROVIDE_FACTUAL_INFO",
+                can_recommend_medication=False,
+                clarification_questions=None,
+            )
+
+        # 5. Symptom + treatment intent → identify primary complaint, route to specific questions
+        has_vague_intent = any(re.search(p, normalized) for p in VAGUE_INTENT_PATTERNS)
+        primary = _classify_primary_symptom(normalized)
+
+        # Additional direct symptom keywords without explicit intent
+        has_symptom_keyword = primary is not None
+
+        if has_vague_intent or has_symptom_keyword:
+            # Select symptom-specific question set
+            if primary == "cough":
+                questions = _build_cough_questions()
+            elif primary == "fever":
+                questions = _build_fever_questions()
+            elif primary == "headache":
+                questions = _build_headache_questions()
+            elif primary == "allergy":
+                questions = _build_allergy_questions()
             else:
-                questions = [
-                    {
-                        "id": "symptoms_detail",
-                        "type": "text",
-                        "question": "Please describe your specific symptoms (e.g. location, severity, fever temperature):",
-                        "required": True,
-                        "placeholder": "e.g. Headache on forehead, mild fever since yesterday",
-                    },
-                    {
-                        "id": "duration",
-                        "type": "single_select",
-                        "question": "How long have you been experiencing this?",
-                        "required": True,
-                        "options": [
-                            {"id": "today", "label": "Started today"},
-                            {"id": "few_days", "label": "A few days"},
-                            {"id": "week_plus", "label": "More than a week"},
-                        ],
-                    },
-                ]
+                questions = _build_general_questions()
 
+            # If we have existing clinical_context, skip already-answered questions
+            if clinical_context:
+                answered = set()
+                pc = clinical_context.get("primary_complaint") or {}
+                if pc.get("duration"):
+                    answered.add("duration")
+                if pc.get("symptom_type"):
+                    answered.add("cough_type")
+                if pc.get("severity"):
+                    answered.add("severity")
+                if clinical_context.get("associated_symptoms"):
+                    answered.add("associated_symptoms")
+                rh = clinical_context.get("relevant_history") or {}
+                if rh.get("allergies"):
+                    answered.add("known_allergies")
+
+                if answered:
+                    questions = [q for q in questions if q["id"] not in answered]
+
+            # If all questions already answered, allow continuation
+            if not questions:
+                return TriageAssessment(
+                    status=TriageStatus.GENERAL_INFORMATION,
+                    is_emergency=False,
+                    emergency_indicators_found=[],
+                    guidance="Sufficient information collected. Continue evaluation.",
+                    recommended_action="CONTINUE_EVALUATION",
+                    can_recommend_medication=False,
+                    clarification_questions=None,
+                    primary_complaint=primary,
+                )
+
+            complaint_label = primary or "your symptoms"
             return TriageAssessment(
                 status=TriageStatus.INSUFFICIENT_INFORMATION,
                 is_emergency=False,
                 emergency_indicators_found=[],
-                guidance="I need a little more information before I can safely evaluate your symptoms.",
+                guidance=f"I need a little more information before I can safely evaluate your {complaint_label}.",
                 recommended_action="ASK_CLARIFYING_SYMPTOMS",
                 can_recommend_medication=False,
                 clarification_questions=questions,
+                primary_complaint=primary,
             )
 
         return TriageAssessment(
