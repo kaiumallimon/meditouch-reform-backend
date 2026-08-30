@@ -86,6 +86,7 @@ class AgentChatService:
         history = await self.memory.get_recent_messages_for_llm(session_id=session_id, window_size=6)
 
         assistant_full_content = ""
+        done_metadata: Dict[str, Any] = {}
         async for event in self.orchestrator.execute_turn_stream(
             session_id=session_id,
             user_id=user_id,
@@ -99,6 +100,12 @@ class AgentChatService:
             data = event.get("data", {})
             if event_name == "done":
                 assistant_full_content = data.get("full_content", "")
+                if data.get("medicine_cards") or data.get("components") or data.get("response_id"):
+                    done_metadata = {
+                        "response_id": data.get("response_id"),
+                        "medicine_cards": data.get("medicine_cards"),
+                        "components": data.get("components"),
+                    }
 
             yield f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
 
@@ -109,7 +116,9 @@ class AgentChatService:
                 user_id=user_id,
                 role="assistant",
                 content=assistant_full_content,
+                tool_results_metadata=done_metadata or None,
             )
+
 
     async def stream_clarification_submission(
         self,
@@ -249,6 +258,7 @@ class AgentChatService:
         )
 
         assistant_full_content = ""
+        done_metadata: Dict[str, Any] = {}
         async for event in self.orchestrator.execute_turn_stream(
             session_id=session_id,
             user_id=user_id,
@@ -263,6 +273,12 @@ class AgentChatService:
             data = event.get("data", {})
             if event_name == "done":
                 assistant_full_content = data.get("full_content", "")
+                if data.get("medicine_cards") or data.get("components") or data.get("response_id"):
+                    done_metadata = {
+                        "response_id": data.get("response_id"),
+                        "medicine_cards": data.get("medicine_cards"),
+                        "components": data.get("components"),
+                    }
 
             yield f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
 
@@ -273,8 +289,10 @@ class AgentChatService:
                 user_id=user_id,
                 role="assistant",
                 content=assistant_full_content,
+                tool_results_metadata=done_metadata or None,
             )
 
         # Update task to completed if agent provided a final answer
         if assistant_full_content and task:
             await self.task_repo.update_task_status(task["task_id"], "completed")
+

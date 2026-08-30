@@ -2,6 +2,7 @@ import json
 import time
 import inspect
 import hashlib
+import uuid
 from typing import AsyncGenerator, List, Dict, Any, Optional
 from app.modules.agent.schemas.chat import AgentState, StreamEventType, SessionType
 from app.modules.agent.schemas.tools import ToolExecutionStatus
@@ -10,6 +11,7 @@ from app.modules.agent.llm.base import LLMProvider
 from app.modules.agent.tools.registry import ToolRegistry
 from app.modules.agent.security.audit import AgentAuditService
 from app.modules.agent.security.policy import CallerContext
+from app.modules.agent.assembler import ResponseAssembler
 from app.modules.agent.prompts.user_prompt import USER_AGENT_SYSTEM_PROMPT
 from app.modules.agent.prompts.admin_prompt import ADMIN_AGENT_SYSTEM_PROMPT
 from app.core.logging import logger
@@ -29,18 +31,18 @@ def _args_hash(tool_name: str, args: Dict[str, Any]) -> str:
 
 class AgentOrchestrator:
     """
-    Autonomous ReAct loop planner and executor.
-    Manages multi-turn tool execution, state transitions, runtime security checks,
-    and real-time SSE stream events.
+    Autonomous ReAct loop planner and executor with centralized ResponseAssembler.
 
-    Key invariants:
-    - Tool dedup cache: identical (tool_name, args) calls return cached result without re-execution.
-    - MAX_SAME_TOOL_RETRIES: hard cap on same-tool retry loops.
-    - Task context injection: if task_context_injection is provided, it is prepended as a
-      priority system message after the base system prompt, BEFORE conversation history.
-      This allows continuation runs to always see the original intent.
-    - Clarification terminal state: when any tool returns CLARIFICATION_REQUIRED,
-      the turn terminates immediately — no LLM calls, tool calls, or text streaming afterward.
+    Core Invariants:
+    1. Stable Response ID: Each assistant response turn has a stable `response_id` across all events.
+    2. Tool Result ≠ UI Event: Tool results (e.g. search_medicines) remain internal and are buffered
+       in ResponseAssembler. Tools do NOT directly emit visual UI cards to the client during execution.
+    3. Real-Time Text Streaming: Text tokens stream immediately in real time.
+    4. Structured UI On Completion: Visual cards (e.g., medicine_cards) are assembled and emitted
+       strictly during response finalization / response_complete.
+    5. Deduplication & Loop Protection: Identical (tool, args_hash) calls reuse cached results.
+    6. Terminal Clarification: When clarification is needed, the turn terminates immediately
+       and buffered UI components are discarded without emission.
     """
 
     def __init__(
@@ -64,7 +66,12 @@ class AgentOrchestrator:
         confirmation_token: Optional[str] = None,
         task_context_injection: Optional[str] = None,
         task_context: Optional[Dict[str, Any]] = None,
+        response_id: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        # 0. Generate or use stable response_id
+        active_response_id = response_id or f"resp_{uuid.uuid4().hex[:12]}"
+        assembler = ResponseAssembler(response_id=active_response_id)
+
         state = AgentExecutionState(
             session_id=session_id,
             user_id=user_id,
@@ -78,11 +85,17 @@ class AgentOrchestrator:
         _tool_retry_counter: Dict[str, int] = {}
 
         # 1. State: RECEIVED
-        yield {"event": StreamEventType.STATE.value, "data": {"state": AgentState.RECEIVED.value}}
+        yield {
+            "event": StreamEventType.STATE.value,
+            "data": {"state": AgentState.RECEIVED.value, "response_id": active_response_id},
+        }
 
         # 2. State: AUTHENTICATING & Context Resolution
         state.transition(AgentState.AUTHENTICATING)
-        yield {"event": StreamEventType.STATE.value, "data": {"state": AgentState.AUTHENTICATING.value}}
+        yield {
+            "event": StreamEventType.STATE.value,
+            "data": {"state": AgentState.AUTHENTICATING.value, "response_id": active_response_id},
+        }
 
         # Authoritative system prompt and tool schema selection
         is_admin_mode = (session_type == SessionType.ADMIN and user_role in ["ADMIN", "DEVELOPER"])
@@ -90,12 +103,8 @@ class AgentOrchestrator:
         tools_for_context = self.registry.get_schemas_for_context(user_role, session_type)
 
         # 3. Assemble Messages Envelope
-        # System prompt is always first
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
 
-        # Task context injection: injected as a SECOND system message immediately after the base
-        # system prompt. This ensures the LLM reads the original intent, primary complaint, and
-        # all collected clinical context BEFORE the conversation history.
         if task_context_injection:
             messages.append({
                 "role": "system",
@@ -125,11 +134,18 @@ class AgentOrchestrator:
 
             if (time.time() - start_time) > MAX_EXECUTION_TIME_SECONDS:
                 logger.warning(f"Agent turn timed out for session {session_id}")
-                yield {"event": StreamEventType.ERROR.value, "data": {"error": "Execution time limit exceeded."}}
+                assembler.clear()
+                yield {
+                    "event": StreamEventType.ERROR.value,
+                    "data": {"error": "Execution time limit exceeded.", "response_id": active_response_id},
+                }
                 break
 
             state.transition(AgentState.PLANNING)
-            yield {"event": StreamEventType.STATE.value, "data": {"state": AgentState.PLANNING.value, "step": loop_count}}
+            yield {
+                "event": StreamEventType.STATE.value,
+                "data": {"state": AgentState.PLANNING.value, "step": loop_count, "response_id": active_response_id},
+            }
 
             # Call LLM Non-Streaming for Tool Selection or Final Response
             try:
@@ -141,8 +157,15 @@ class AgentOrchestrator:
             except Exception as e:
                 logger.error(f"LLM Chat Error in agent loop: {e}")
                 err_msg = f"⚠️ **AI Engine Error**: {str(e)}"
-                yield {"event": StreamEventType.TOKEN.value, "data": {"delta": err_msg}}
-                yield {"event": StreamEventType.ERROR.value, "data": {"error": str(e)}}
+                assembler.clear()
+                yield {
+                    "event": StreamEventType.TOKEN.value,
+                    "data": {"delta": err_msg, "response_id": active_response_id},
+                }
+                yield {
+                    "event": StreamEventType.ERROR.value,
+                    "data": {"error": str(e), "response_id": active_response_id},
+                }
                 final_answer = err_msg
                 break
 
@@ -153,6 +176,7 @@ class AgentOrchestrator:
                     "tag": active_model_tag,
                     "provider": response.get("_provider"),
                     "model": response.get("_model"),
+                    "response_id": active_response_id,
                 },
             }
 
@@ -167,9 +191,11 @@ class AgentOrchestrator:
             # A. If Model Wants to Call Tools
             if tool_calls:
                 state.transition(AgentState.EXECUTING)
-                yield {"event": StreamEventType.STATE.value, "data": {"state": AgentState.EXECUTING.value}}
+                yield {
+                    "event": StreamEventType.STATE.value,
+                    "data": {"state": AgentState.EXECUTING.value, "response_id": active_response_id},
+                }
 
-                # Append assistant message with tool calls to prompt buffer
                 messages.append({
                     "role": "assistant",
                     "content": content,
@@ -191,12 +217,11 @@ class AgentOrchestrator:
                     except Exception:
                         args = {}
 
-                    # ── Duplicate Tool Call Deduplication ────────────────────────
+                    # ── Tool Call Deduplication ───────────────────────────────
                     call_hash = _args_hash(tool_name, args)
                     retry_count = _tool_retry_counter.get(call_hash, 0)
 
                     if call_hash in _tool_result_cache and retry_count >= MAX_SAME_TOOL_RETRIES:
-                        # Hard cap reached — reuse cached result without re-executing
                         logger.warning(
                             f"[Dedup] Tool '{tool_name}' called with identical args {retry_count + 1} times — "
                             f"reusing cached result for session {session_id}"
@@ -205,12 +230,27 @@ class AgentOrchestrator:
 
                         yield {
                             "event": StreamEventType.TOOL_CALL.value,
-                            "data": {"tool": tool_name, "arguments": args, "tool_call_id": tool_call_id, "cached": True},
+                            "data": {
+                                "tool": tool_name,
+                                "arguments": args,
+                                "tool_call_id": tool_call_id,
+                                "cached": True,
+                                "response_id": active_response_id,
+                            },
                         }
                         yield {
                             "event": StreamEventType.TOOL_RESULT.value,
-                            "data": {"tool": tool_name, "status": cached_status.value, "result": cached_res_data, "cached": True},
+                            "data": {
+                                "tool": tool_name,
+                                "status": cached_status.value,
+                                "result": cached_res_data,
+                                "cached": True,
+                                "response_id": active_response_id,
+                            },
                         }
+
+                        # Buffer into ResponseAssembler
+                        assembler.record_tool_result(tool_name, args, cached_res_data)
 
                         sanitized_content = json.dumps(cached_res_data, ensure_ascii=False, default=str)
                         if len(sanitized_content) > MAX_TOOL_RESULT_STRING_LENGTH:
@@ -229,7 +269,12 @@ class AgentOrchestrator:
                     # Emit Tool Start Event
                     yield {
                         "event": StreamEventType.TOOL_CALL.value,
-                        "data": {"tool": tool_name, "arguments": args, "tool_call_id": tool_call_id},
+                        "data": {
+                            "tool": tool_name,
+                            "arguments": args,
+                            "tool_call_id": tool_call_id,
+                            "response_id": active_response_id,
+                        },
                     }
 
                     # Execute Tool via Gateway with Runtime Authorization
@@ -238,14 +283,13 @@ class AgentOrchestrator:
                         res_data = {"error": f"Tool '{tool_name}' not recognized."}
                         status = ToolExecutionStatus.ERROR
                     else:
-                        # Runtime Policy Gate
                         is_auth, auth_err = self.registry.authorize_execution(tool, caller_ctx)
                         if not is_auth:
                             logger.warning(f"Security Policy Blocked '{tool_name}' for {user_role}:{user_id}: {auth_err}")
                             status = ToolExecutionStatus.PERMISSION_DENIED
                             res_data = {"error": auth_err or "Permission denied."}
                         else:
-                            # Build extra kwargs selectively — only pass what the tool's signature accepts
+                            # Build extra kwargs selectively
                             _sig = inspect.signature(tool.execute)
                             _extra_kwargs: Dict[str, Any] = {}
                             _has_var_kw = any(
@@ -274,32 +318,33 @@ class AgentOrchestrator:
                             if status not in (ToolExecutionStatus.ERROR, ToolExecutionStatus.PERMISSION_DENIED):
                                 _tool_result_cache[call_hash] = (res_data, status)
 
+                            # Record in ResponseAssembler (buffered internally, NOT emitted as UI yet)
+                            assembler.record_tool_result(tool_name, args, res_data)
+
                             # ── Clarification Required — TERMINAL STATE ───────────
                             if tool_res.requires_clarification or status == ToolExecutionStatus.CLARIFICATION_REQUIRED:
+                                assembler.clear()  # Discard any buffered UI cards
                                 clarif_data = tool_res.clarification_payload or (res_data if isinstance(res_data, dict) else {})
                                 yield {
                                     "event": StreamEventType.CLARIFICATION_REQUIRED.value,
-                                    "data": clarif_data,
+                                    "data": {**clarif_data, "response_id": active_response_id},
                                 }
                                 state.transition(AgentState.COMPLETE)
-                                yield {"event": StreamEventType.STATE.value, "data": {"state": AgentState.COMPLETE.value}}
+                                yield {
+                                    "event": StreamEventType.STATE.value,
+                                    "data": {"state": AgentState.COMPLETE.value, "response_id": active_response_id},
+                                }
                                 yield {
                                     "event": StreamEventType.DONE.value,
                                     "data": {
                                         "finish_reason": "clarification_required",
-                                        "full_content": "",  # No text content — clarification card is the response
+                                        "full_content": "",
                                         "model_name": active_model_tag,
                                         "clarification": clarif_data,
+                                        "response_id": active_response_id,
                                     },
                                 }
-                                # STOP IMMEDIATELY. Never ask and answer in the same turn!
                                 return
-
-                            # Emit Specialized Visual Cards if medicine catalog results
-                            if tool_name == "search_medicines" and isinstance(res_data, dict):
-                                meds = res_data.get("medicines") or []
-                                if meds:
-                                    yield {"event": StreamEventType.MEDICINE_CARDS.value, "data": {"medicines": meds}}
 
                             # Emit Confirmation Prompt Event if confirmation required
                             if tool_res.requires_confirmation:
@@ -309,6 +354,7 @@ class AgentOrchestrator:
                                         "token": tool_res.confirmation_token,
                                         "prompt": tool_res.confirmation_prompt,
                                         "details": res_data,
+                                        "response_id": active_response_id,
                                     },
                                 }
 
@@ -328,18 +374,22 @@ class AgentOrchestrator:
                                     metadata=tool_res.metadata,
                                 )
 
-                    # Emit Tool Result Event
+                    # Emit Tool Result Event (data notification only — does not render visual UI)
                     yield {
                         "event": StreamEventType.TOOL_RESULT.value,
-                        "data": {"tool": tool_name, "status": status.value, "result": res_data},
+                        "data": {
+                            "tool": tool_name,
+                            "status": status.value,
+                            "result": res_data,
+                            "response_id": active_response_id,
+                        },
                     }
 
-                    # Sanitize and truncate tool result string to prevent prompt bloat / injection
+                    # Sanitize and truncate tool result string
                     sanitized_content = json.dumps(res_data, ensure_ascii=False, default=str)
                     if len(sanitized_content) > MAX_TOOL_RESULT_STRING_LENGTH:
                         sanitized_content = sanitized_content[:MAX_TOOL_RESULT_STRING_LENGTH] + "... [TRUNCATED_OUTPUT]"
 
-                    # Feed tool result back into context
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call_id,
@@ -347,31 +397,58 @@ class AgentOrchestrator:
                         "content": sanitized_content,
                     })
 
-                # Loop continues back to LLM with tool results in context!
                 continue
 
             # B. If Model Emitted Final Text (No More Tools)
             else:
                 state.transition(AgentState.STREAMING)
-                yield {"event": StreamEventType.STATE.value, "data": {"state": AgentState.STREAMING.value}}
+                yield {
+                    "event": StreamEventType.STATE.value,
+                    "data": {"state": AgentState.STREAMING.value, "response_id": active_response_id},
+                }
 
-                # Stream out the content tokens in chunks
+                # Stream out content tokens in real time
                 final_answer = content
                 chunk_size = 30
                 for i in range(0, len(content), chunk_size):
                     chunk = content[i : i + chunk_size]
-                    yield {"event": StreamEventType.TOKEN.value, "data": {"delta": chunk}}
+                    yield {
+                        "event": StreamEventType.TOKEN.value,
+                        "data": {"delta": chunk, "response_id": active_response_id},
+                    }
 
                 break
 
-        # 5. State: COMPLETE
+        # 5. State: FINALIZING & Structured UI Assembly
+        # Assembled structured UI components (e.g. medicine cards) are emitted strictly upon finalization
+        state.transition(AgentState.FINALIZING)
+        medicine_cards = assembler.get_medicine_cards(limit=5)
+        structured_components = assembler.assemble_final_components()
+
+        if medicine_cards:
+            # Emit finalized medicine cards event right after text streaming finishes
+            yield {
+                "event": StreamEventType.MEDICINE_CARDS.value,
+                "data": {
+                    "medicines": medicine_cards,
+                    "response_id": active_response_id,
+                },
+            }
+
+        # 6. State: COMPLETE
         state.transition(AgentState.COMPLETE)
-        yield {"event": StreamEventType.STATE.value, "data": {"state": AgentState.COMPLETE.value}}
+        yield {
+            "event": StreamEventType.STATE.value,
+            "data": {"state": AgentState.COMPLETE.value, "response_id": active_response_id},
+        }
         yield {
             "event": StreamEventType.DONE.value,
             "data": {
                 "finish_reason": "stop",
                 "full_content": final_answer,
                 "model_name": active_model_tag,
+                "response_id": active_response_id,
+                "medicine_cards": medicine_cards,
+                "components": structured_components,
             },
         }
