@@ -50,7 +50,6 @@ class SearchMedicinesTool(BaseTool):
         pagination = PaginationParams(page=1, limit=limit)
         res = await self.service.search_catalog(filters, pagination)
 
-        # Filter out cosmetic/skincare products from general medicine search
         items_summary = [
             {
                 "id": m.id,
@@ -58,7 +57,9 @@ class SearchMedicinesTool(BaseTool):
                 "brand": m.brand or m.name or m.medicine_name,
                 "generic_name": m.generic_name,
                 "strength": m.strength,
-                "dosage_form": m.dosage_form or "Tablet",
+                "dosage_form": m.dosage_form or "Piece",
+                "category": m.category,
+                "category_name": m.category_name,
                 "unit_price": m.unit_price,
                 "pack_size": m.pack_size,
                 "in_stock": m.in_stock,
@@ -68,8 +69,8 @@ class SearchMedicinesTool(BaseTool):
                 "manufacturer": m.manufacturer or m.manufacturer_name,
             }
             for m in res.items
-            if (m.category or "").upper() not in ["SKIN_CARE", "COSMETICS", "BEAUTY", "SKIN CARE"]
         ]
+
 
         return ToolResult(
             tool_call_id="",
