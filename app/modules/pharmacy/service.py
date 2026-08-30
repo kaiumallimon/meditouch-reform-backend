@@ -43,8 +43,16 @@ class PharmacyService:
                 item_dict["medicine_name"] = item_dict.get("brand") or item_dict.get("name") or "Unknown"
             if not item_dict.get("name"):
                 item_dict["name"] = f"{item_dict.get('brand', '')} {item_dict.get('strength', '')}".strip() or item_dict["medicine_name"]
-            if not item_dict.get("manufacturer_name"):
-                item_dict["manufacturer_name"] = item_dict.get("manufacturer") or "Unknown Pharma"
+            mfg = item_dict.get("manufacturer_name")
+            if not mfg or str(mfg).isdigit():
+                mfg_candidate = item_dict.get("manufacturer")
+                if mfg_candidate and not str(mfg_candidate).isdigit():
+                    mfg = str(mfg_candidate)
+                elif item_dict.get("brand") and not str(item_dict.get("brand")).isdigit():
+                    mfg = str(item_dict.get("brand"))
+                else:
+                    mfg = ""
+            item_dict["manufacturer_name"] = mfg
             if not item_dict.get("brand"):
                 item_dict["brand"] = item_dict.get("name") or item_dict.get("medicine_name") or "Unknown"
             if item_dict.get("generic_name") is None:
@@ -89,8 +97,16 @@ class PharmacyService:
             item_dict["medicine_name"] = item_dict.get("brand") or item_dict.get("name") or "Unknown"
         if not item_dict.get("name"):
             item_dict["name"] = f"{item_dict.get('brand', '')} {item_dict.get('strength', '')}".strip() or item_dict["medicine_name"]
-        if not item_dict.get("manufacturer_name"):
-            item_dict["manufacturer_name"] = item_dict.get("manufacturer") or "Unknown Pharma"
+        mfg = item_dict.get("manufacturer_name")
+        if not mfg or str(mfg).isdigit():
+            mfg_candidate = item_dict.get("manufacturer")
+            if mfg_candidate and not str(mfg_candidate).isdigit():
+                mfg = str(mfg_candidate)
+            elif item_dict.get("brand") and not str(item_dict.get("brand")).isdigit():
+                mfg = str(item_dict.get("brand"))
+            else:
+                mfg = ""
+        item_dict["manufacturer_name"] = mfg
         if not item_dict.get("brand"):
             item_dict["brand"] = item_dict.get("name") or item_dict.get("medicine_name") or "Unknown"
         if item_dict.get("generic_name") is None:
@@ -120,25 +136,42 @@ class PharmacyService:
 
         return MedicineResponse(**item_dict)
 
-    async def get_medicine_detail(self, slug: str) -> MedicineDetailResponse:
-        # First check medicine_details collection
-        detail = await self.repo.get_detail_by_slug(slug)
-        if detail:
-            d_dict = dict(detail)
-            if not d_dict.get("generic_name"):
-                d_dict["generic_name"] = ""
-            if not d_dict.get("medicine_name"):
-                d_dict["medicine_name"] = d_dict.get("brand") or "Unknown"
-            return MedicineDetailResponse(**d_dict)
+    async def get_medicine_details(self, slug: str) -> MedicineDetailResponse:
+        details_doc = await self.repo.get_details_by_slug(slug)
+        if details_doc:
+            # Reconstruct response from full monograph doc
+            return MedicineDetailResponse(
+                id=str(details_doc.get("id", "")),
+                medicine_id=str(details_doc.get("medicine_id", "")),
+                slug=details_doc.get("slug") or slug,
+                medicine_name=details_doc.get("medicine_name", "Medicine"),
+                generic_name=details_doc.get("generic_name", ""),
+                category_name=details_doc.get("category_name", "Tablet"),
+                category_slug=details_doc.get("category_slug", "otc-medicine"),
+                manufacturer_name=details_doc.get("manufacturer_name") or details_doc.get("product_info", {}).get("manufacturer_name"),
+                meta_title=details_doc.get("meta_title"),
+                meta_description=details_doc.get("meta_description"),
+                product_info=details_doc.get("product_info", {}),
+                medicine_details=details_doc.get("medicine_details", {}),
+                related_medicines=details_doc.get("related_medicines", [])
+            )
 
-        # Fallback to base medicine if details not crawled yet
+        # Fallback to catalogue search
         med = await self.repo.get_by_slug(slug)
-        if not med:
-            med = await self.repo.get_by_id(slug)
         if not med:
             raise NotFoundException(f"Medicine details for '{slug}' not found")
 
         med_name = med.get("medicine_name") or med.get("brand") or "Unknown"
+        mfg = med.get("manufacturer_name")
+        if not mfg or str(mfg).isdigit():
+            mfg_candidate = med.get("manufacturer")
+            if mfg_candidate and not str(mfg_candidate).isdigit():
+                mfg = str(mfg_candidate)
+            elif med.get("brand") and not str(med.get("brand")).isdigit():
+                mfg = str(med.get("brand"))
+            else:
+                mfg = None
+
         return MedicineDetailResponse(
             id=str(med.get("id", "")),
             medicine_id=str(med.get("id", "")),
@@ -147,7 +180,7 @@ class PharmacyService:
             generic_name=med.get("generic_name") or "",
             category_name=med.get("category_name") or "Tablet",
             category_slug=med.get("category_slug") or "otc-medicine",
-            manufacturer_name=med.get("manufacturer_name") or med.get("manufacturer") or "Unknown Pharma",
+            manufacturer_name=mfg,
             meta_title=f"{med_name} - Price, Uses & Side Effects",
             meta_description=f"Information on {med_name} ({med.get('generic_name') or ''})",
             product_info=med,
