@@ -89,8 +89,8 @@ class Settings(BaseSettings):
     # 2. OpenRouter (free-tier models with tool calling support)
     OPENROUTER_API_KEY: str = Field(default="")
     OPENROUTER_BASE_URL: str = Field(default="https://openrouter.ai/api/v1")
-    OPENROUTER_MODEL: str = Field(default="meta-llama/llama-3.3-70b-instruct:free")
-    OPENROUTER_MODELS: str = Field(default="meta-llama/llama-3.3-70b-instruct:free,meta-llama/llama-3.1-8b-instruct:free")
+    OPENROUTER_MODEL: str = Field(default="openrouter/free")
+    OPENROUTER_MODELS: str = Field(default="openrouter/free,meta-llama/llama-3.3-70b-instruct:free,meta-llama/llama-3.1-8b-instruct:free,google/gemma-3-27b-it:free")
 
     # 3. TokenRouter
     TOKENROUTER_API_KEY: str = Field(default="")
