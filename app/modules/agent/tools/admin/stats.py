@@ -2,13 +2,16 @@ from typing import Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.modules.agent.tools.base import BaseTool
 from app.modules.agent.schemas.tools import ToolExecutionStatus, ToolResult
+from app.modules.agent.schemas.capabilities import ToolCapability
 from app.modules.admin.repository import AdminRepository
 from app.common.enums import UserRole
 
 class GetPlatformSummaryStatsTool(BaseTool):
     name = "get_platform_summary_stats"
     description = "Queries real-time platform metrics: total users, active doctors, pending verifications, consultations, total orders, and total revenue."
+    capability = ToolCapability.READ_ADMIN_DATA
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = False
     is_destructive = False
     parameters = {
         "type": "object",
@@ -27,9 +30,6 @@ class GetPlatformSummaryStatsTool(BaseTool):
         session_id: str,
         confirmation_token: Optional[str] = None,
     ) -> ToolResult:
-        if not self.is_authorized(caller_role):
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
-
         stats = await self.admin_repo.get_dashboard_stats()
         med_count = await self.db.medicines.count_documents({"is_active": True})
         low_stock = await self.db.medicines.count_documents({"is_active": True, "stock_count": {"$lt": 20}})
@@ -48,7 +48,9 @@ class GetPlatformSummaryStatsTool(BaseTool):
 class QueryAuditLogsTool(BaseTool):
     name = "query_audit_logs"
     description = "Queries the immutable system audit logs for administrative security monitoring."
+    capability = ToolCapability.READ_ADMIN_DATA
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = False
     is_destructive = False
     parameters = {
         "type": "object",
@@ -71,9 +73,6 @@ class QueryAuditLogsTool(BaseTool):
         session_id: str,
         confirmation_token: Optional[str] = None,
     ) -> ToolResult:
-        if not self.is_authorized(caller_role):
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
-
         limit = min(int(arguments.get("limit", 10)), 30)
         logs, total = await self.admin_repo.get_audit_logs(
             limit=limit,
@@ -104,7 +103,9 @@ class QueryAuditLogsTool(BaseTool):
 class GetAdminOrdersTool(BaseTool):
     name = "get_all_orders_admin"
     description = "Lists recent pharmacy orders across all users with status, items, amounts, and shipping."
+    capability = ToolCapability.READ_ADMIN_DATA
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = False
     is_destructive = False
     parameters = {
         "type": "object",
@@ -125,9 +126,6 @@ class GetAdminOrdersTool(BaseTool):
         session_id: str,
         confirmation_token: Optional[str] = None,
     ) -> ToolResult:
-        if not self.is_authorized(caller_role):
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
-
         limit = min(int(arguments.get("limit", 10)), 50)
         query: Dict[str, Any] = {}
         if arguments.get("status"):

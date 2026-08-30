@@ -2,6 +2,7 @@ from typing import Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.modules.agent.tools.base import BaseTool
 from app.modules.agent.schemas.tools import ToolExecutionStatus, ToolResult
+from app.modules.agent.schemas.capabilities import ToolCapability
 from app.modules.pharmacy.repository import PharmacyRepository
 from app.modules.pharmacy.service import PharmacyService
 from app.modules.pharmacy.schemas import MedicineFilterParams
@@ -11,7 +12,10 @@ from app.common.enums import UserRole
 class SearchMedicinesTool(BaseTool):
     name = "search_medicines"
     description = "Searches for medicines in the pharmacy catalog by name, brand, or generic."
-    roles_allowed = [UserRole.USER.value, UserRole.DOCTOR.value, UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    capability = ToolCapability.READ_CATALOG
+    roles_allowed = [UserRole.USER.value, UserRole.DOCTOR.value, UserRole.NURSE.value, UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = False
+    is_destructive = False
     parameters = {
         "type": "object",
         "properties": {
@@ -59,7 +63,7 @@ class SearchMedicinesTool(BaseTool):
                 "pack_size": m.pack_size,
                 "in_stock": m.in_stock,
                 "stock_count": m.stock_count,
-                "requires_prescription": m.requires_prescription or m.rx_required,
+                "requires_prescription": bool(m.requires_prescription or m.rx_required),
                 "image": m.medicine_image,
                 "manufacturer": m.manufacturer or m.manufacturer_name,
             }
@@ -77,8 +81,11 @@ class SearchMedicinesTool(BaseTool):
 
 class GetMedicineDetailsTool(BaseTool):
     name = "get_medicine_details"
-    description = "Retrieves complete clinical monograph details for a medicine by slug or ID."
-    roles_allowed = [UserRole.USER.value, UserRole.DOCTOR.value, UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    description = "Retrieves complete factual clinical monograph details for a medicine by slug or ID."
+    capability = ToolCapability.MEDICAL_INFORMATION
+    roles_allowed = [UserRole.USER.value, UserRole.DOCTOR.value, UserRole.NURSE.value, UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = False
+    is_destructive = False
     parameters = {
         "type": "object",
         "properties": {
@@ -102,7 +109,7 @@ class GetMedicineDetailsTool(BaseTool):
                 status=ToolExecutionStatus.SUCCESS,
                 result=detail.model_dump(),
             )
-        except Exception as e:
+        except Exception:
             # Fallback to basic medicine record
             try:
                 med = await self.service.get_medicine_by_id_or_slug(slug_or_id)
@@ -124,7 +131,10 @@ class GetMedicineDetailsTool(BaseTool):
 class CheckMedicineStockTool(BaseTool):
     name = "check_medicine_stock"
     description = "Checks current inventory stock count and pricing tiers for a medicine."
-    roles_allowed = [UserRole.USER.value, UserRole.DOCTOR.value, UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    capability = ToolCapability.READ_CATALOG
+    roles_allowed = [UserRole.USER.value, UserRole.DOCTOR.value, UserRole.NURSE.value, UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = False
+    is_destructive = False
     parameters = {
         "type": "object",
         "properties": {

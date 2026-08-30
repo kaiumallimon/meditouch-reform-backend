@@ -2,6 +2,7 @@ from typing import Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.modules.agent.tools.base import BaseTool
 from app.modules.agent.schemas.tools import ToolExecutionStatus, ToolResult
+from app.modules.agent.schemas.capabilities import ToolCapability
 from app.integrations.cloudinary.client import cloudinary_service
 from app.core.config import settings
 from app.common.enums import UserRole
@@ -9,7 +10,10 @@ from app.common.enums import UserRole
 class GetCDNStorageStatsTool(BaseTool):
     name = "get_cdn_storage_stats"
     description = "Queries Cloudinary CDN storage volume, byte breakdown by folder, and asset count."
+    capability = ToolCapability.READ_CDN_DATA
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = False
+    is_destructive = False
     parameters = {
         "type": "object",
         "properties": {},
@@ -19,9 +23,6 @@ class GetCDNStorageStatsTool(BaseTool):
         self.db = db
 
     async def execute(self, arguments: Dict[str, Any], caller_id: str, caller_role: str, session_id: str, confirmation_token: Optional[str] = None) -> ToolResult:
-        if not self.is_authorized(caller_role):
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
-
         total_assets = await self.db.media_assets.count_documents({})
         total_images = await self.db.media_assets.count_documents({"resource_type": "image"})
         total_docs = await self.db.media_assets.count_documents({"resource_type": {"$ne": "image"}})

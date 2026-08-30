@@ -3,8 +3,9 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import ValidationError
 from app.modules.agent.tools.base import BaseTool
 from app.modules.agent.schemas.tools import ToolExecutionStatus, ToolResult
+from app.modules.agent.schemas.capabilities import ToolCapability
 from app.modules.agent.commands.user_commands import CreateUserCommand
-from app.modules.agent.security.confirmation import confirmation_manager
+from app.modules.agent.security.pending_actions import AgentPendingActionRepository
 from app.modules.agent.tools.resolver import EntityResolver
 from app.modules.admin.repository import AdminRepository
 from app.modules.auth.repository import AuthRepository
@@ -16,7 +17,9 @@ from app.common.enums import UserRole
 class SearchUsersTool(BaseTool):
     name = "search_users"
     description = "Searches for user accounts by email, name, phone number, role, or ID in the database. Returns sanitized user profiles."
+    capability = ToolCapability.READ_ADMIN_DATA
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = False
     is_destructive = False
     parameters = {
         "type": "object",
@@ -34,9 +37,6 @@ class SearchUsersTool(BaseTool):
         self.admin_repo = AdminRepository(db)
 
     async def execute(self, arguments: Dict[str, Any], caller_id: str, caller_role: str, session_id: str, confirmation_token: Optional[str] = None) -> ToolResult:
-        if not self.is_authorized(caller_role):
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
-
         query = arguments.get("query", "").strip()
         role = arguments.get("role")
         limit = min(int(arguments.get("limit", 5)), 20)
@@ -80,8 +80,11 @@ class SearchUsersTool(BaseTool):
 class CreateUserTool(BaseTool):
     name = "create_user"
     description = "Creates a new user account with auto-generated secure password and sends email. Requires admin confirmation."
+    capability = ToolCapability.CREATE_USER
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = True
     is_destructive = False
+    requires_confirmation = True
     parameters = {
         "type": "object",
         "properties": {
@@ -101,11 +104,9 @@ class CreateUserTool(BaseTool):
         auth_repo = AuthRepository(db)
         doc_repo = DoctorRepository(db)
         self.service = AdminService(admin_repo, auth_repo, doc_repo, db)
+        self.pending_repo = AgentPendingActionRepository(db)
 
     async def execute(self, arguments: Dict[str, Any], caller_id: str, caller_role: str, session_id: str, confirmation_token: Optional[str] = None) -> ToolResult:
-        if not self.is_authorized(caller_role):
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
-
         # 1. Pydantic Command Validation
         try:
             cmd = CreateUserCommand(**arguments)
@@ -115,11 +116,11 @@ class CreateUserTool(BaseTool):
         except Exception as e:
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
 
-        # 2. If confirmation token is present, execute via domain service
+        # 2. Execution with Verified Pending Action
         if confirmation_token:
-            payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
+            payload = await self.pending_repo.validate_and_consume(confirmation_token, actor_id=caller_id, session_id=session_id)
             if not payload:
-                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid or expired confirmation token")
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid, expired, or already executed confirmation token.")
 
             cdata = payload.get("command_data", arguments)
             req = AdminCreateUserRequest(
@@ -132,6 +133,7 @@ class CreateUserTool(BaseTool):
             )
             try:
                 user = await self.service.create_user_account(req, admin_id=caller_id)
+                await self.pending_repo.mark_completed(confirmation_token, {"created_user_id": user.id})
                 return ToolResult(
                     tool_call_id="",
                     name=self.name,
@@ -140,10 +142,13 @@ class CreateUserTool(BaseTool):
                     metadata={"action": "CREATE_USER", "resource_id": user.id, "user_name": user.name},
                 )
             except Exception as e:
+                await self.pending_repo.mark_failed(confirmation_token, str(e))
                 return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
 
         # 3. Request Admin Confirmation
-        token = confirmation_manager.create_pending_confirmation(
+        token = await self.pending_repo.create_pending_action(
+            actor_id=caller_id,
+            actor_role=caller_role,
             session_id=session_id,
             action="create_user",
             target_type="USER",
@@ -174,8 +179,11 @@ class CreateUserTool(BaseTool):
 class DeactivateUserTool(BaseTool):
     name = "deactivate_user"
     description = "Deactivates a user profile. Requires 2-step confirmation."
+    capability = ToolCapability.DEACTIVATE_PROFILE
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = True
     is_destructive = True
+    requires_confirmation = True
     parameters = {
         "type": "object",
         "properties": {
@@ -191,26 +199,29 @@ class DeactivateUserTool(BaseTool):
         auth_repo = AuthRepository(db)
         doc_repo = DoctorRepository(db)
         self.service = AdminService(admin_repo, auth_repo, doc_repo, db)
+        self.pending_repo = AgentPendingActionRepository(db)
 
     async def execute(self, arguments: Dict[str, Any], caller_id: str, caller_role: str, session_id: str, confirmation_token: Optional[str] = None) -> ToolResult:
-        if not self.is_authorized(caller_role):
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
-
         if confirmation_token:
-            payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
+            payload = await self.pending_repo.validate_and_consume(confirmation_token, actor_id=caller_id, session_id=session_id)
             if not payload:
-                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid or expired confirmation token")
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid, expired, or already executed confirmation token.")
             
             user_id = payload["target_id"]
-            req = AdminUpdateUserRequest(is_active=False)
-            user = await self.service.update_user_account(user_id, req, admin_id=caller_id)
-            return ToolResult(
-                tool_call_id="",
-                name=self.name,
-                status=ToolExecutionStatus.SUCCESS,
-                result={"id": user.id, "name": user.name, "is_active": user.is_active, "status": "DEACTIVATED"},
-                metadata={"action": "DEACTIVATE_USER", "resource_id": user.id},
-            )
+            try:
+                req = AdminUpdateUserRequest(is_active=False)
+                user = await self.service.update_user_account(user_id, req, admin_id=caller_id)
+                await self.pending_repo.mark_completed(confirmation_token, {"user_id": user.id, "status": "DEACTIVATED"})
+                return ToolResult(
+                    tool_call_id="",
+                    name=self.name,
+                    status=ToolExecutionStatus.SUCCESS,
+                    result={"id": user.id, "name": user.name, "is_active": user.is_active, "status": "DEACTIVATED"},
+                    metadata={"action": "DEACTIVATE_USER", "resource_id": user.id},
+                )
+            except Exception as e:
+                await self.pending_repo.mark_failed(confirmation_token, str(e))
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
 
         query = arguments.get("query", "")
         res = await self.resolver.resolve_user(query)
@@ -225,7 +236,9 @@ class DeactivateUserTool(BaseTool):
             )
 
         target = res["match"]
-        token = confirmation_manager.create_pending_confirmation(
+        token = await self.pending_repo.create_pending_action(
+            actor_id=caller_id,
+            actor_role=caller_role,
             session_id=session_id,
             action="deactivate_user",
             target_type="USER",
@@ -254,8 +267,11 @@ class DeactivateUserTool(BaseTool):
 class DeleteUserTool(BaseTool):
     name = "delete_user"
     description = "Soft-deletes a user profile. Requires 2-step confirmation."
+    capability = ToolCapability.DELETE_PROFILE
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = True
     is_destructive = True
+    requires_confirmation = True
     parameters = {
         "type": "object",
         "properties": {
@@ -271,25 +287,28 @@ class DeleteUserTool(BaseTool):
         auth_repo = AuthRepository(db)
         doc_repo = DoctorRepository(db)
         self.service = AdminService(admin_repo, auth_repo, doc_repo, db)
+        self.pending_repo = AgentPendingActionRepository(db)
 
     async def execute(self, arguments: Dict[str, Any], caller_id: str, caller_role: str, session_id: str, confirmation_token: Optional[str] = None) -> ToolResult:
-        if not self.is_authorized(caller_role):
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
-
         if confirmation_token:
-            payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
+            payload = await self.pending_repo.validate_and_consume(confirmation_token, actor_id=caller_id, session_id=session_id)
             if not payload:
-                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid or expired confirmation token")
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid, expired, or already executed confirmation token.")
             
             user_id = payload["target_id"]
-            user = await self.service.soft_delete_user_account(user_id, admin_id=caller_id)
-            return ToolResult(
-                tool_call_id="",
-                name=self.name,
-                status=ToolExecutionStatus.SUCCESS,
-                result={"id": user.id, "name": user.name, "is_active": user.is_active, "status": "SOFT_DELETED"},
-                metadata={"action": "DELETE_USER", "resource_id": user.id},
-            )
+            try:
+                user = await self.service.soft_delete_user_account(user_id, admin_id=caller_id)
+                await self.pending_repo.mark_completed(confirmation_token, {"user_id": user.id, "status": "SOFT_DELETED"})
+                return ToolResult(
+                    tool_call_id="",
+                    name=self.name,
+                    status=ToolExecutionStatus.SUCCESS,
+                    result={"id": user.id, "name": user.name, "is_active": user.is_active, "status": "SOFT_DELETED"},
+                    metadata={"action": "DELETE_USER", "resource_id": user.id},
+                )
+            except Exception as e:
+                await self.pending_repo.mark_failed(confirmation_token, str(e))
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
 
         query = arguments.get("query", "")
         res = await self.resolver.resolve_user(query)
@@ -304,7 +323,9 @@ class DeleteUserTool(BaseTool):
             )
 
         target = res["match"]
-        token = confirmation_manager.create_pending_confirmation(
+        token = await self.pending_repo.create_pending_action(
+            actor_id=caller_id,
+            actor_role=caller_role,
             session_id=session_id,
             action="delete_user",
             target_type="USER",

@@ -13,7 +13,7 @@ class EntityResolver:
 
     async def resolve_user(self, query: str) -> Dict[str, Any]:
         """
-        Resolves a user by ID, phone number, email, or exact name.
+        Resolves a user by ID, phone number, email, or name.
         """
         clean = query.strip()
         # 1. Exact ID Match
@@ -33,7 +33,7 @@ class EntityResolver:
 
         # 4. Search by Name (Regex)
         regex = re.compile(re.escape(clean), re.IGNORECASE)
-        cursor = self.db.users.find({"name": {"$regex": regex}}).limit(5)
+        cursor = self.db.users.find({"name": {"$regex": regex}, "is_deleted": {"$ne": True}}).limit(5)
         candidates = await cursor.to_list(length=5)
 
         if len(candidates) == 1:
@@ -54,19 +54,57 @@ class EntityResolver:
             }
         return {"status": "NOT_FOUND"}
 
+    async def resolve_doctor(self, query: str) -> Dict[str, Any]:
+        """
+        Resolves a doctor by ID, BMDC registration number, phone, email, or name.
+        """
+        clean = query.strip()
+        # 1. Exact ID or BMDC Match
+        doc = await self.db.doctors.find_one({"$or": [{"id": clean}, {"bmdc_reg_number": clean.upper()}]})
+        if doc:
+            return {"status": "EXACT_MATCH", "match": doc}
+
+        # 2. Phone or Email Match
+        doc = await self.db.doctors.find_one({"$or": [{"phone": clean}, {"email": clean}]})
+        if doc:
+            return {"status": "EXACT_MATCH", "match": doc}
+
+        # 3. Name Regex Match
+        regex = re.compile(re.escape(clean), re.IGNORECASE)
+        cursor = self.db.doctors.find({"name": {"$regex": regex}, "is_deleted": {"$ne": True}}).limit(5)
+        candidates = await cursor.to_list(length=5)
+
+        if len(candidates) == 1:
+            return {"status": "EXACT_MATCH", "match": candidates[0]}
+        elif len(candidates) > 1:
+            return {
+                "status": "AMBIGUOUS",
+                "candidates": [
+                    {
+                        "id": d.get("id"),
+                        "name": d.get("name"),
+                        "bmdc_reg_number": d.get("bmdc_reg_number"),
+                        "specialties": d.get("specialties"),
+                        "is_verified": d.get("is_verified", False),
+                    }
+                    for d in candidates
+                ],
+            }
+        return {"status": "NOT_FOUND"}
+
     async def resolve_medicine(self, query: str) -> Dict[str, Any]:
         """
         Resolves a medicine by slug, ID, or brand name.
         """
         clean = query.strip()
         # 1. Exact slug or ID
-        med = await self.db.medicines.find_one({"$or": [{"slug": clean}, {"id": clean}]})
+        med = await self.db.medicines.find_one({"$or": [{"slug": clean}, {"id": clean}], "is_deleted": {"$ne": True}})
         if med:
             return {"status": "EXACT_MATCH", "match": med}
 
         # 2. Search by brand
         regex = re.compile(re.escape(clean), re.IGNORECASE)
-        cursor = self.db.medicines.find({"brand": {"$regex": regex}}).limit(6)
+        cursor = self.db.medicines.find({"brand": {"$regex": regex}, "is_deleted": {"$ne": True}}).limit(6)
         candidates = await cursor.to_list(length=6)
 
         if len(candidates) == 1:

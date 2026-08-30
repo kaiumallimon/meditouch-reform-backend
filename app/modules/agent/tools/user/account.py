@@ -2,12 +2,15 @@ from typing import Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.modules.agent.tools.base import BaseTool
 from app.modules.agent.schemas.tools import ToolExecutionStatus, ToolResult
+from app.modules.agent.schemas.capabilities import ToolCapability
 from app.common.enums import UserRole
 
 class GetMyProfileTool(BaseTool):
     name = "get_my_profile"
     description = "Retrieves the authenticated caller's user profile (name, email, phone, role, address)."
+    capability = ToolCapability.READ_PERSONAL_DATA
     roles_allowed = [UserRole.USER.value, UserRole.DOCTOR.value, UserRole.NURSE.value, UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = False
     is_destructive = False
     parameters = {
         "type": "object",
@@ -56,7 +59,9 @@ class GetMyProfileTool(BaseTool):
 class GetMyOrdersTool(BaseTool):
     name = "get_my_orders"
     description = "Retrieves recent pharmacy medicine orders placed by the authenticated user."
+    capability = ToolCapability.READ_PERSONAL_DATA
     roles_allowed = [UserRole.USER.value, UserRole.DOCTOR.value, UserRole.NURSE.value, UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = False
     is_destructive = False
     parameters = {
         "type": "object",
@@ -110,7 +115,9 @@ class GetMyOrdersTool(BaseTool):
 class GetMyAppointmentsTool(BaseTool):
     name = "get_my_appointments"
     description = "Retrieves upcoming and past telemedicine doctor appointments for the authenticated user."
+    capability = ToolCapability.READ_PERSONAL_DATA
     roles_allowed = [UserRole.USER.value, UserRole.DOCTOR.value, UserRole.NURSE.value, UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = False
     is_destructive = False
     parameters = {
         "type": "object",

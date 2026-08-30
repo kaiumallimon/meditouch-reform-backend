@@ -1,9 +1,10 @@
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import ValidationError
 from app.modules.agent.tools.base import BaseTool
 from app.modules.agent.schemas.tools import ToolExecutionStatus, ToolResult
-from app.modules.agent.security.confirmation import confirmation_manager
+from app.modules.agent.schemas.capabilities import ToolCapability
+from app.modules.agent.security.pending_actions import AgentPendingActionRepository
 from app.modules.agent.tools.resolver import EntityResolver
 from app.modules.admin.repository import AdminRepository
 from app.modules.auth.repository import AuthRepository
@@ -11,13 +12,15 @@ from app.modules.doctors.repository import DoctorRepository
 from app.modules.admin.service import AdminService
 from app.modules.admin.schemas import CreateDoctorAccountRequest
 from app.common.enums import UserRole, DoctorVerificationStatus
-import uuid
 
 class CreateDoctorTool(BaseTool):
     name = "create_doctor"
     description = "Registers a new doctor profile with BMDC number, specialties, qualifications, and consultation fee. Requires admin confirmation."
+    capability = ToolCapability.CREATE_DOCTOR
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = True
     is_destructive = False
+    requires_confirmation = True
     parameters = {
         "type": "object",
         "properties": {
@@ -39,6 +42,7 @@ class CreateDoctorTool(BaseTool):
         auth_repo = AuthRepository(db)
         doc_repo = DoctorRepository(db)
         self.service = AdminService(admin_repo, auth_repo, doc_repo, db)
+        self.pending_repo = AgentPendingActionRepository(db)
 
     async def execute(
         self,
@@ -48,9 +52,6 @@ class CreateDoctorTool(BaseTool):
         session_id: str,
         confirmation_token: Optional[str] = None,
     ) -> ToolResult:
-        if not self.is_authorized(caller_role):
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
-
         # 1. Pydantic Schema Validation
         try:
             req = CreateDoctorAccountRequest(
@@ -69,14 +70,15 @@ class CreateDoctorTool(BaseTool):
         except Exception as e:
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
 
-        # 2. Execution with Confirmation
+        # 2. Execution with Verified Pending Action
         if confirmation_token:
-            payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
+            payload = await self.pending_repo.validate_and_consume(confirmation_token, actor_id=caller_id, session_id=session_id)
             if not payload:
-                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid or expired confirmation token")
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid, expired, or already executed confirmation token.")
 
             try:
                 doc = await self.service.create_doctor_account(req, admin_id=caller_id)
+                await self.pending_repo.mark_completed(confirmation_token, {"created_doctor_id": doc.id})
                 return ToolResult(
                     tool_call_id="",
                     name=self.name,
@@ -85,9 +87,12 @@ class CreateDoctorTool(BaseTool):
                     metadata={"action": "CREATE_DOCTOR", "doctor_id": doc.id, "doctor_name": doc.name},
                 )
             except Exception as e:
+                await self.pending_repo.mark_failed(confirmation_token, str(e))
                 return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
 
-        token = confirmation_manager.create_pending_confirmation(
+        token = await self.pending_repo.create_pending_action(
+            actor_id=caller_id,
+            actor_role=caller_role,
             session_id=session_id,
             action="create_doctor",
             target_type="DOCTOR",
@@ -118,8 +123,11 @@ class CreateDoctorTool(BaseTool):
 class VerifyDoctorTool(BaseTool):
     name = "verify_doctor"
     description = "Updates the verification status of a doctor account (VERIFIED or REJECTED). Requires admin confirmation."
+    capability = ToolCapability.VERIFY_DOCTOR
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = True
     is_destructive = False
+    requires_confirmation = True
     parameters = {
         "type": "object",
         "properties": {
@@ -136,6 +144,7 @@ class VerifyDoctorTool(BaseTool):
         auth_repo = AuthRepository(db)
         doc_repo = DoctorRepository(db)
         self.service = AdminService(admin_repo, auth_repo, doc_repo, db)
+        self.pending_repo = AgentPendingActionRepository(db)
 
     async def execute(
         self,
@@ -145,9 +154,6 @@ class VerifyDoctorTool(BaseTool):
         session_id: str,
         confirmation_token: Optional[str] = None,
     ) -> ToolResult:
-        if not self.is_authorized(caller_role):
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
-
         doctor_id = arguments.get("doctor_id", "").strip()
         status_str = arguments.get("status", "").upper()
         rejection_reason = arguments.get("rejection_reason")
@@ -158,9 +164,9 @@ class VerifyDoctorTool(BaseTool):
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=f"Invalid verification status: '{status_str}'. Must be VERIFIED, REJECTED, or PENDING.")
 
         if confirmation_token:
-            payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
+            payload = await self.pending_repo.validate_and_consume(confirmation_token, actor_id=caller_id, session_id=session_id)
             if not payload:
-                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid or expired confirmation token")
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid, expired, or already executed confirmation token.")
 
             try:
                 doc = await self.service.verify_doctor(
@@ -169,6 +175,7 @@ class VerifyDoctorTool(BaseTool):
                     rejection_reason=rejection_reason,
                     admin_id=caller_id,
                 )
+                await self.pending_repo.mark_completed(confirmation_token, {"doctor_id": doc.id, "status": status_str})
                 return ToolResult(
                     tool_call_id="",
                     name=self.name,
@@ -177,9 +184,12 @@ class VerifyDoctorTool(BaseTool):
                     metadata={"action": "VERIFY_DOCTOR", "doctor_id": doc.id, "status": status_str},
                 )
             except Exception as e:
+                await self.pending_repo.mark_failed(confirmation_token, str(e))
                 return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
 
-        token = confirmation_manager.create_pending_confirmation(
+        token = await self.pending_repo.create_pending_action(
+            actor_id=caller_id,
+            actor_role=caller_role,
             session_id=session_id,
             action="verify_doctor",
             target_type="DOCTOR",
@@ -202,8 +212,11 @@ class VerifyDoctorTool(BaseTool):
 class DeleteDoctorTool(BaseTool):
     name = "delete_doctor"
     description = "Soft-deletes a doctor profile. Requires 2-step confirmation."
+    capability = ToolCapability.DELETE_DOCTOR
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = True
     is_destructive = True
+    requires_confirmation = True
     parameters = {
         "type": "object",
         "properties": {
@@ -219,6 +232,7 @@ class DeleteDoctorTool(BaseTool):
         auth_repo = AuthRepository(db)
         doc_repo = DoctorRepository(db)
         self.service = AdminService(admin_repo, auth_repo, doc_repo, db)
+        self.pending_repo = AgentPendingActionRepository(db)
 
     async def execute(
         self,
@@ -228,30 +242,42 @@ class DeleteDoctorTool(BaseTool):
         session_id: str,
         confirmation_token: Optional[str] = None,
     ) -> ToolResult:
-        if not self.is_authorized(caller_role):
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
-
         if confirmation_token:
-            payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
+            payload = await self.pending_repo.validate_and_consume(confirmation_token, actor_id=caller_id, session_id=session_id)
             if not payload:
-                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid or expired confirmation token")
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid, expired, or already executed confirmation token.")
             
             doctor_id = payload["target_id"]
-            doc = await self.service.soft_delete_doctor_account(doctor_id, admin_id=caller_id)
+            try:
+                doc = await self.service.soft_delete_doctor_account(doctor_id, admin_id=caller_id)
+                await self.pending_repo.mark_completed(confirmation_token, {"doctor_id": doc.id, "status": "DELETED"})
+                return ToolResult(
+                    tool_call_id="",
+                    name=self.name,
+                    status=ToolExecutionStatus.SUCCESS,
+                    result={"id": doc.id, "name": doc.name, "status": "DELETED"},
+                    metadata={"action": "DELETE_DOCTOR", "doctor_id": doc.id},
+                )
+            except Exception as e:
+                await self.pending_repo.mark_failed(confirmation_token, str(e))
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
+
+        query = arguments.get("query", "").strip()
+        res = await self.resolver.resolve_doctor(query)
+        if res["status"] == "NOT_FOUND":
+            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=f"No doctor found matching: {query}")
+        elif res["status"] == "AMBIGUOUS":
             return ToolResult(
                 tool_call_id="",
                 name=self.name,
                 status=ToolExecutionStatus.SUCCESS,
-                result={"id": doc.id, "name": doc.name, "status": "DELETED"},
-                metadata={"action": "DELETE_DOCTOR", "doctor_id": doc.id},
+                result={"candidates": res["candidates"], "message": f"Multiple doctors matched '{query}'. Please specify BMDC number or ID."},
             )
 
-        query = arguments.get("query", "").strip()
-        doc = await self.db.doctors.find_one({"$or": [{"id": query}, {"bmdc_reg_number": query}, {"phone": query}, {"name": {"$regex": query, "$options": "i"}}]})
-        if not doc:
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=f"No doctor found matching: {query}")
-
-        token = confirmation_manager.create_pending_confirmation(
+        doc = res["match"]
+        token = await self.pending_repo.create_pending_action(
+            actor_id=caller_id,
+            actor_role=caller_role,
             session_id=session_id,
             action="delete_doctor",
             target_type="DOCTOR",

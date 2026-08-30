@@ -103,6 +103,27 @@ async def create_db_indexes(db: AsyncIOMotorDatabase) -> None:
             IndexModel([("target_type", ASCENDING), ("target_id", ASCENDING)], name="idx_audit_target"),
             IndexModel([("created_at", DESCENDING)], name="idx_audit_created_at"),
         ])
+        await db.agent_pending_actions.create_indexes([
+            IndexModel([("id", ASCENDING)], unique=True, name="idx_agent_pending_id_unique"),
+            IndexModel([("actor_id", ASCENDING), ("status", ASCENDING)], name="idx_agent_pending_actor_status"),
+            IndexModel([("session_id", ASCENDING)], name="idx_agent_pending_session"),
+            IndexModel([("expires_at", ASCENDING)], name="idx_agent_pending_expires"),
+        ])
+        await db.agent_audit_logs.create_indexes([
+            IndexModel([("id", ASCENDING)], unique=True, name="idx_agent_audit_id_unique"),
+            IndexModel([("actor_id", ASCENDING)], name="idx_agent_audit_actor"),
+            IndexModel([("action", ASCENDING)], name="idx_agent_audit_action"),
+            IndexModel([("timestamp", DESCENDING)], name="idx_agent_audit_timestamp"),
+        ])
+        await db.chat_sessions.create_indexes([
+            IndexModel([("id", ASCENDING)], unique=True, name="idx_chat_sessions_id_unique"),
+            IndexModel([("user_id", ASCENDING), ("is_archived", ASCENDING)], name="idx_chat_sessions_user"),
+            IndexModel([("updated_at", DESCENDING)], name="idx_chat_sessions_updated"),
+        ])
+        await db.chat_messages.create_indexes([
+            IndexModel([("id", ASCENDING)], unique=True, name="idx_chat_messages_id_unique"),
+            IndexModel([("session_id", ASCENDING), ("created_at", ASCENDING)], name="idx_chat_messages_session_time"),
+        ])
         logger.info("All MongoDB indexes successfully ensured.")
     except Exception as e:
         logger.error(f"Error creating MongoDB indexes: {e}")

@@ -1,4 +1,5 @@
 from typing import AsyncGenerator, List, Dict, Any, Optional
+import json
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.modules.agent.schemas.chat import SessionType, ChatRequest
 from app.modules.agent.memory.repository import AgentMemoryRepository
@@ -7,6 +8,7 @@ from app.modules.agent.tools.registry import ToolRegistry
 from app.modules.agent.security.audit import AgentAuditService
 from app.modules.agent.llm.service import LLMService
 from app.modules.agent.orchestrator import AgentOrchestrator
+from app.core.exceptions import ForbiddenException, NotFoundException
 
 class AgentChatService:
     """High-level service coordinating memory, permissions, orchestrator, and stream generation."""
@@ -30,27 +32,35 @@ class AgentChatService:
         user_id: str,
         user_role: str,
         first_message: str,
+        explicit_session_type: Optional[SessionType] = None,
     ) -> Dict[str, Any]:
-        session_type = SessionType.ADMIN if user_role in ["ADMIN", "DEVELOPER"] else SessionType.USER
+        default_type = SessionType.ADMIN if user_role in ["ADMIN", "DEVELOPER"] else SessionType.USER
+        target_type = explicit_session_type or default_type
+
         if session_id:
             session = await self.repo.get_session(session_id)
-            if session and session.get("user_id") == user_id:
-                return session
+            if not session:
+                raise NotFoundException(f"Chat session '{session_id}' not found.")
+            if session.get("user_id") != user_id:
+                raise ForbiddenException("Access denied: You do not own this chat session.")
+            return session
 
         title = self.memory.generate_initial_title(first_message)
-        return await self.repo.create_session(user_id=user_id, session_type=session_type, title=title)
+        return await self.repo.create_session(user_id=user_id, session_type=target_type, title=title)
 
     async def stream_chat_turn(
         self,
         req: ChatRequest,
         user_id: str,
         user_role: str,
+        explicit_session_type: Optional[SessionType] = None,
     ) -> AsyncGenerator[str, None]:
         session = await self.get_or_create_session(
             session_id=req.session_id,
             user_id=user_id,
             user_role=user_role,
             first_message=req.message,
+            explicit_session_type=explicit_session_type,
         )
         session_id = session["id"]
         session_type = SessionType(session["session_type"])
@@ -64,7 +74,6 @@ class AgentChatService:
         )
 
         # Emit initial session metadata event
-        import json
         yield f"event: session\ndata: {json.dumps({'session_id': session_id, 'title': session.get('title')}, default=str)}\n\n"
 
         history = await self.memory.get_recent_messages_for_llm(session_id=session_id, window_size=6)

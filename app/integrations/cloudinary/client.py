@@ -3,9 +3,15 @@ import uuid
 import time
 import re
 from typing import Optional, Dict, Any, Union
-import cloudinary
-import cloudinary.uploader
-import cloudinary.api
+try:
+    import cloudinary
+    import cloudinary.uploader
+    import cloudinary.api
+    CLOUDINARY_AVAILABLE = True
+except ImportError:
+    cloudinary = None
+    CLOUDINARY_AVAILABLE = False
+
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.exceptions import BadRequestException
@@ -24,7 +30,7 @@ class CloudinaryCDNService:
         self._configure()
 
     def _configure(self):
-        if settings.CLOUDINARY_CLOUD_NAME and settings.CLOUDINARY_API_KEY and settings.CLOUDINARY_API_SECRET:
+        if CLOUDINARY_AVAILABLE and settings.CLOUDINARY_CLOUD_NAME and settings.CLOUDINARY_API_KEY and settings.CLOUDINARY_API_SECRET:
             cloudinary.config(
                 cloud_name=settings.CLOUDINARY_CLOUD_NAME,
                 api_key=settings.CLOUDINARY_API_KEY,

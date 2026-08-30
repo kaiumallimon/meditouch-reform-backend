@@ -1,21 +1,25 @@
 from typing import Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from datetime import datetime, timezone
 from pydantic import ValidationError
-import uuid
-import re
 from app.modules.agent.tools.base import BaseTool
 from app.modules.agent.schemas.tools import ToolExecutionStatus, ToolResult
+from app.modules.agent.schemas.capabilities import ToolCapability
 from app.modules.agent.commands.medicine_commands import CreateMedicineCommand, UpdateMedicineCommand
-from app.modules.agent.security.confirmation import confirmation_manager
+from app.modules.agent.security.pending_actions import AgentPendingActionRepository
 from app.modules.agent.tools.resolver import EntityResolver
+from app.modules.pharmacy.repository import PharmacyRepository
+from app.modules.pharmacy.service import PharmacyService
+from app.modules.pharmacy.schemas import CreateMedicineRequest, UpdateMedicineRequest
 from app.common.enums import UserRole
 
 class CreateMedicineTool(BaseTool):
     name = "create_medicine"
     description = "Adds a new medicine to the pharmacy catalog with brand name, generic, pricing, and stock. Requires admin confirmation."
+    capability = ToolCapability.CREATE_MEDICINE
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = True
     is_destructive = False
+    requires_confirmation = True
     parameters = {
         "type": "object",
         "properties": {
@@ -35,6 +39,9 @@ class CreateMedicineTool(BaseTool):
 
     def __init__(self, db: AsyncIOMotorDatabase):
         self.db = db
+        repo = PharmacyRepository(db)
+        self.service = PharmacyService(repo, db)
+        self.pending_repo = AgentPendingActionRepository(db)
 
     async def execute(
         self,
@@ -44,9 +51,6 @@ class CreateMedicineTool(BaseTool):
         session_id: str,
         confirmation_token: Optional[str] = None,
     ) -> ToolResult:
-        if not self.is_authorized(caller_role):
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
-
         # 1. Pydantic Command Validation
         try:
             cmd = CreateMedicineCommand(
@@ -65,50 +69,43 @@ class CreateMedicineTool(BaseTool):
         except Exception as e:
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
 
-        # 2. Execution with Confirmation
+        # 2. Execution with Verified Pending Action
         if confirmation_token:
-            payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
+            payload = await self.pending_repo.validate_and_consume(confirmation_token, actor_id=caller_id, session_id=session_id)
             if not payload:
-                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid or expired confirmation token")
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid, expired, or already executed confirmation token.")
 
             cdata = payload.get("command_data", arguments)
-            slug = re.sub(r"[^a-zA-Z0-9]+", "-", cdata["brand"].lower()).strip("-") + f"-{str(uuid.uuid4())[:6]}"
-            now = datetime.now(timezone.utc)
-
-            doc = {
-                "id": f"med_{uuid.uuid4()}",
-                "brand": cdata["brand"],
-                "name": cdata["brand"],
-                "medicine_name": cdata["brand"],
-                "generic_name": cdata["generic_name"].strip(),
-                "dosage_form": cdata.get("dosage_form", "Tablet"),
-                "strength": cdata.get("strength", "500mg"),
-                "unit_price": float(cdata["unit_price"]),
-                "price_pack": float(cdata.get("price_pack", float(cdata["unit_price"]) * 10)),
-                "pack_size": cdata.get("pack_size", "10x10 Tablets"),
-                "manufacturer": cdata.get("manufacturer", "Square Pharmaceuticals"),
-                "manufacturer_name": cdata.get("manufacturer", "Square Pharmaceuticals"),
-                "stock_count": int(cdata.get("stock_count", 100)),
-                "in_stock": int(cdata.get("stock_count", 100)) > 0,
-                "requires_prescription": bool(cdata.get("requires_prescription", False)),
-                "slug": slug,
-                "is_active": True,
-                "created_at": now,
-                "updated_at": now,
-            }
-
-            await self.db.medicines.insert_one(doc)
-            doc.pop("_id", None)
-
-            return ToolResult(
-                tool_call_id="",
-                name=self.name,
-                status=ToolExecutionStatus.SUCCESS,
-                result=doc,
-                metadata={"action": "CREATE_MEDICINE", "medicine_id": doc["id"], "brand": cmd.brand},
+            req = CreateMedicineRequest(
+                brand=cdata["brand"],
+                generic_name=cdata["generic_name"],
+                dosage_form=cdata.get("dosage_form", "Tablet"),
+                strength=cdata.get("strength", "500mg"),
+                unit_price=float(cdata["unit_price"]),
+                price_pack=float(cdata.get("price_pack", float(cdata["unit_price"]) * 10)),
+                pack_size=cdata.get("pack_size", "10x10 Tablets"),
+                manufacturer=cdata.get("manufacturer", "Square Pharmaceuticals"),
+                stock_count=int(cdata.get("stock_count", 100)),
+                requires_prescription=bool(cdata.get("requires_prescription", False)),
             )
+            try:
+                med = await self.service.create_medicine(req, admin_id=caller_id)
+                await self.pending_repo.mark_completed(confirmation_token, {"created_medicine_id": med.id})
+                return ToolResult(
+                    tool_call_id="",
+                    name=self.name,
+                    status=ToolExecutionStatus.SUCCESS,
+                    result=med.model_dump(),
+                    metadata={"action": "CREATE_MEDICINE", "medicine_id": med.id, "brand": med.brand},
+                )
+            except Exception as e:
+                await self.pending_repo.mark_failed(confirmation_token, str(e))
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
 
-        token = confirmation_manager.create_pending_confirmation(
+        # 3. Create Pending Action for Confirmation
+        token = await self.pending_repo.create_pending_action(
+            actor_id=caller_id,
+            actor_role=caller_role,
             session_id=session_id,
             action="create_medicine",
             target_type="MEDICINE",
@@ -139,8 +136,11 @@ class CreateMedicineTool(BaseTool):
 class UpdateMedicineStockTool(BaseTool):
     name = "update_medicine_stock"
     description = "Updates the inventory stock count for a medicine. Requires admin confirmation."
+    capability = ToolCapability.UPDATE_MEDICINE
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = True
     is_destructive = False
+    requires_confirmation = True
     parameters = {
         "type": "object",
         "properties": {
@@ -154,6 +154,9 @@ class UpdateMedicineStockTool(BaseTool):
     def __init__(self, db: AsyncIOMotorDatabase):
         self.db = db
         self.resolver = EntityResolver(db)
+        repo = PharmacyRepository(db)
+        self.service = PharmacyService(repo, db)
+        self.pending_repo = AgentPendingActionRepository(db)
 
     async def execute(
         self,
@@ -163,9 +166,6 @@ class UpdateMedicineStockTool(BaseTool):
         session_id: str,
         confirmation_token: Optional[str] = None,
     ) -> ToolResult:
-        if not self.is_authorized(caller_role):
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
-
         query = arguments.get("medicine", "").strip()
         res = await self.resolver.resolve_medicine(query)
         if res["status"] == "NOT_FOUND":
@@ -184,34 +184,38 @@ class UpdateMedicineStockTool(BaseTool):
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Please specify either new_stock or quantity_delta.")
 
         if confirmation_token:
-            payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
+            payload = await self.pending_repo.validate_and_consume(confirmation_token, actor_id=caller_id, session_id=session_id)
             if not payload:
-                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid or expired confirmation token")
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid, expired, or already executed confirmation token.")
 
             cdata = payload.get("command_data", {})
             stock_to_apply = cdata.get("final_stock", final_stock)
 
-            now = datetime.now(timezone.utc)
-            await self.db.medicines.update_one(
-                {"id": med["id"]},
-                {"$set": {"stock_count": stock_to_apply, "in_stock": stock_to_apply > 0, "updated_at": now}}
-            )
+            try:
+                req = UpdateMedicineRequest(stock_count=stock_to_apply)
+                updated = await self.service.update_medicine(med["id"], req, admin_id=caller_id)
+                await self.pending_repo.mark_completed(confirmation_token, {"medicine_id": med["id"], "new_stock": stock_to_apply})
 
-            return ToolResult(
-                tool_call_id="",
-                name=self.name,
-                status=ToolExecutionStatus.SUCCESS,
-                result={
-                    "id": med["id"],
-                    "brand": med.get("brand"),
-                    "previous_stock": current_stock,
-                    "new_stock": stock_to_apply,
-                    "in_stock": stock_to_apply > 0,
-                },
-                metadata={"action": "UPDATE_STOCK", "medicine_id": med["id"]},
-            )
+                return ToolResult(
+                    tool_call_id="",
+                    name=self.name,
+                    status=ToolExecutionStatus.SUCCESS,
+                    result={
+                        "id": updated.id,
+                        "brand": updated.brand or updated.name,
+                        "previous_stock": current_stock,
+                        "new_stock": updated.stock_count,
+                        "in_stock": updated.in_stock,
+                    },
+                    metadata={"action": "UPDATE_STOCK", "medicine_id": med["id"]},
+                )
+            except Exception as e:
+                await self.pending_repo.mark_failed(confirmation_token, str(e))
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
 
-        token = confirmation_manager.create_pending_confirmation(
+        token = await self.pending_repo.create_pending_action(
+            actor_id=caller_id,
+            actor_role=caller_role,
             session_id=session_id,
             action="update_medicine_stock",
             target_type="MEDICINE",
@@ -240,8 +244,11 @@ class UpdateMedicineStockTool(BaseTool):
 class DeleteMedicineTool(BaseTool):
     name = "delete_medicine"
     description = "Removes or deactivates a medicine from the catalog. Requires 2-step confirmation."
+    capability = ToolCapability.DELETE_MEDICINE
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    is_mutation = True
     is_destructive = True
+    requires_confirmation = True
     parameters = {
         "type": "object",
         "properties": {
@@ -253,6 +260,9 @@ class DeleteMedicineTool(BaseTool):
     def __init__(self, db: AsyncIOMotorDatabase):
         self.db = db
         self.resolver = EntityResolver(db)
+        repo = PharmacyRepository(db)
+        self.service = PharmacyService(repo, db)
+        self.pending_repo = AgentPendingActionRepository(db)
 
     async def execute(
         self,
@@ -262,24 +272,25 @@ class DeleteMedicineTool(BaseTool):
         session_id: str,
         confirmation_token: Optional[str] = None,
     ) -> ToolResult:
-        if not self.is_authorized(caller_role):
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
-
         if confirmation_token:
-            payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
+            payload = await self.pending_repo.validate_and_consume(confirmation_token, actor_id=caller_id, session_id=session_id)
             if not payload:
-                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid or expired confirmation token")
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid, expired, or already executed confirmation token.")
             
             med_id = payload["target_id"]
-            now = datetime.now(timezone.utc)
-            await self.db.medicines.update_one({"id": med_id}, {"$set": {"is_active": False, "is_deleted": True, "updated_at": now}})
-            return ToolResult(
-                tool_call_id="",
-                name=self.name,
-                status=ToolExecutionStatus.SUCCESS,
-                result={"id": med_id, "status": "DELETED"},
-                metadata={"action": "DELETE_MEDICINE", "medicine_id": med_id},
-            )
+            try:
+                deleted = await self.service.delete_medicine(med_id, admin_id=caller_id)
+                await self.pending_repo.mark_completed(confirmation_token, {"medicine_id": med_id, "deleted": deleted})
+                return ToolResult(
+                    tool_call_id="",
+                    name=self.name,
+                    status=ToolExecutionStatus.SUCCESS,
+                    result={"id": med_id, "status": "DELETED"},
+                    metadata={"action": "DELETE_MEDICINE", "medicine_id": med_id},
+                )
+            except Exception as e:
+                await self.pending_repo.mark_failed(confirmation_token, str(e))
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
 
         query = arguments.get("medicine", "").strip()
         res = await self.resolver.resolve_medicine(query)
@@ -289,7 +300,9 @@ class DeleteMedicineTool(BaseTool):
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.SUCCESS, result={"candidates": res["candidates"], "message": f"Multiple medicines matched '{query}'. Please specify exact strength."})
 
         med = res["match"]
-        token = confirmation_manager.create_pending_confirmation(
+        token = await self.pending_repo.create_pending_action(
+            actor_id=caller_id,
+            actor_role=caller_role,
             session_id=session_id,
             action="delete_medicine",
             target_type="MEDICINE",

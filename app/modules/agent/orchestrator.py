@@ -7,6 +7,7 @@ from app.modules.agent.state import AgentExecutionState
 from app.modules.agent.llm.base import LLMProvider
 from app.modules.agent.tools.registry import ToolRegistry
 from app.modules.agent.security.audit import AgentAuditService
+from app.modules.agent.security.policy import CallerContext
 from app.modules.agent.prompts.user_prompt import USER_AGENT_SYSTEM_PROMPT
 from app.modules.agent.prompts.admin_prompt import ADMIN_AGENT_SYSTEM_PROMPT
 from app.core.logging import logger
@@ -14,11 +15,13 @@ from app.core.logging import logger
 MAX_AGENT_STEPS = 8
 MAX_TOOL_CALLS = 12
 MAX_EXECUTION_TIME_SECONDS = 35.0
+MAX_TOOL_RESULT_STRING_LENGTH = 4000
 
 class AgentOrchestrator:
     """
     Autonomous ReAct loop planner and executor.
-    Manages multi-turn tool execution, state transitions, and real-time SSE stream events.
+    Manages multi-turn tool execution, state transitions, runtime security checks,
+    and real-time SSE stream events.
     """
 
     def __init__(
@@ -51,12 +54,14 @@ class AgentOrchestrator:
         # 1. State: RECEIVED
         yield {"event": StreamEventType.STATE.value, "data": {"state": AgentState.RECEIVED.value}}
 
-        # 2. State: AUTHENTICATING & Tool Resolution
+        # 2. State: AUTHENTICATING & Context Resolution
         state.transition(AgentState.AUTHENTICATING)
         yield {"event": StreamEventType.STATE.value, "data": {"state": AgentState.AUTHENTICATING.value}}
 
-        system_prompt = ADMIN_AGENT_SYSTEM_PROMPT if session_type == SessionType.ADMIN else USER_AGENT_SYSTEM_PROMPT
-        tools_for_role = self.registry.get_schemas_for_role(user_role)
+        # Authoritative system prompt and tool schema selection
+        is_admin_mode = (session_type == SessionType.ADMIN and user_role in ["ADMIN", "DEVELOPER"])
+        system_prompt = ADMIN_AGENT_SYSTEM_PROMPT if is_admin_mode else USER_AGENT_SYSTEM_PROMPT
+        tools_for_context = self.registry.get_schemas_for_context(user_role, session_type)
 
         # 3. Assemble Messages Envelope
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
@@ -66,6 +71,15 @@ class AgentOrchestrator:
         start_time = time.time()
         loop_count = 0
         final_answer = ""
+        active_model_tag = getattr(self.llm, "model_tag", "AI Model")
+
+        caller_ctx = CallerContext(
+            caller_id=user_id,
+            caller_role=user_role,
+            session_id=session_id,
+            session_type=session_type,
+            is_authenticated=(user_id not in ["guest_user", "anonymous", ""]),
+        )
 
         # 4. State: PLANNING & Autonomous ReAct Execution Loop
         while loop_count < MAX_AGENT_STEPS:
@@ -84,7 +98,7 @@ class AgentOrchestrator:
             try:
                 response = await self.llm.chat_complete(
                     messages=messages,
-                    tools=tools_for_role if tools_for_role else None,
+                    tools=tools_for_context if tools_for_context else None,
                     temperature=0.2,
                 )
             except Exception as e:
@@ -126,6 +140,10 @@ class AgentOrchestrator:
                 })
 
                 for tc in tool_calls:
+                    if state.tool_call_count >= MAX_TOOL_CALLS:
+                        logger.warning(f"Max tool calls ({MAX_TOOL_CALLS}) reached in turn {session_id}")
+                        break
+
                     state.increment_tool_call()
                     fn = tc.get("function", {})
                     tool_name = fn.get("name", "")
@@ -142,54 +160,61 @@ class AgentOrchestrator:
                         "data": {"tool": tool_name, "arguments": args, "tool_call_id": tool_call_id},
                     }
 
-                    # Execute Tool via Gateway
+                    # Execute Tool via Gateway with Runtime Authorization
                     tool = self.registry.get_tool(tool_name)
                     if not tool:
                         res_data = {"error": f"Tool '{tool_name}' not recognized."}
                         status = ToolExecutionStatus.ERROR
                     else:
-                        tool_res = await tool.execute(
-                            arguments=args,
-                            caller_id=user_id,
-                            caller_role=user_role,
-                            session_id=session_id,
-                            confirmation_token=confirmation_token,
-                        )
-                        status = tool_res.status
-                        res_data = tool_res.result or {"error": tool_res.error_message}
-
-                        # Emit Specialized Visual Cards if medicine results
-                        if tool_name in ["search_medicines", "suggest_medicines_for_symptoms"] and isinstance(res_data, dict):
-                            meds = res_data.get("medicines") or res_data.get("otc_suggestions") or []
-                            if meds:
-                                yield {"event": StreamEventType.MEDICINE_CARDS.value, "data": {"medicines": meds}}
-
-                        # Emit Confirmation Prompt Event if confirmation required
-                        if tool_res.requires_confirmation:
-                            yield {
-                                "event": StreamEventType.CONFIRMATION_REQUIRED.value,
-                                "data": {
-                                    "token": tool_res.confirmation_token,
-                                    "prompt": tool_res.confirmation_prompt,
-                                    "details": res_data,
-                                },
-                            }
-
-                        # Log Audit Event for Admin Mutations
-                        if tool_res.metadata and tool_res.metadata.get("action"):
-                            await self.audit.log_action(
-                                actor_id=user_id,
-                                actor_role=user_role,
+                        # Runtime Policy Gate
+                        is_auth, auth_err = self.registry.authorize_execution(tool, caller_ctx)
+                        if not is_auth:
+                            logger.warning(f"Security Policy Blocked '{tool_name}' for {user_role}:{user_id}: {auth_err}")
+                            status = ToolExecutionStatus.PERMISSION_DENIED
+                            res_data = {"error": auth_err or "Permission denied."}
+                        else:
+                            tool_res = await tool.execute(
+                                arguments=args,
+                                caller_id=user_id,
+                                caller_role=user_role,
                                 session_id=session_id,
-                                action=tool_res.metadata["action"],
-                                resource_type="USER" if "user" in tool_name else "MEDICINE",
-                                resource_id=tool_res.metadata.get("resource_id", "unknown"),
-                                tool_name=tool_name,
-                                status=tool_res.status.value,
-                                confirmation_required=tool_res.requires_confirmation,
-                                confirmation_received=bool(confirmation_token),
-                                metadata=tool_res.metadata,
+                                confirmation_token=confirmation_token,
                             )
+                            status = tool_res.status
+                            res_data = tool_res.result or {"error": tool_res.error_message}
+
+                            # Emit Specialized Visual Cards if medicine catalog results
+                            if tool_name == "search_medicines" and isinstance(res_data, dict):
+                                meds = res_data.get("medicines") or []
+                                if meds:
+                                    yield {"event": StreamEventType.MEDICINE_CARDS.value, "data": {"medicines": meds}}
+
+                            # Emit Confirmation Prompt Event if confirmation required
+                            if tool_res.requires_confirmation:
+                                yield {
+                                    "event": StreamEventType.CONFIRMATION_REQUIRED.value,
+                                    "data": {
+                                        "token": tool_res.confirmation_token,
+                                        "prompt": tool_res.confirmation_prompt,
+                                        "details": res_data,
+                                    },
+                                }
+
+                            # Log Audit Event for Admin Mutations
+                            if tool_res.metadata and tool_res.metadata.get("action"):
+                                await self.audit.log_action(
+                                    actor_id=user_id,
+                                    actor_role=user_role,
+                                    session_id=session_id,
+                                    action=tool_res.metadata["action"],
+                                    resource_type="USER" if "user" in tool_name else ("DOCTOR" if "doctor" in tool_name else "MEDICINE"),
+                                    resource_id=tool_res.metadata.get("resource_id", "unknown"),
+                                    tool_name=tool_name,
+                                    status=tool_res.status.value,
+                                    confirmation_required=tool_res.requires_confirmation,
+                                    confirmation_received=bool(confirmation_token),
+                                    metadata=tool_res.metadata,
+                                )
 
                     # Emit Tool Result Event
                     yield {
@@ -197,12 +222,17 @@ class AgentOrchestrator:
                         "data": {"tool": tool_name, "status": status.value, "result": res_data},
                     }
 
+                    # Sanitize and truncate tool result string to prevent prompt bloat / injection
+                    sanitized_content = json.dumps(res_data, ensure_ascii=False, default=str)
+                    if len(sanitized_content) > MAX_TOOL_RESULT_STRING_LENGTH:
+                        sanitized_content = sanitized_content[:MAX_TOOL_RESULT_STRING_LENGTH] + "... [TRUNCATED_OUTPUT]"
+
                     # Feed tool result back into context
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "name": tool_name,
-                        "content": json.dumps(res_data, ensure_ascii=False, default=str),
+                        "content": sanitized_content,
                     })
 
                 # Loop continues back to LLM with tool results in context!
@@ -230,6 +260,6 @@ class AgentOrchestrator:
             "data": {
                 "finish_reason": "stop",
                 "full_content": final_answer,
-                "model_name": active_model_tag if "active_model_tag" in locals() else getattr(self.llm, "model_tag", "AI Model"),
+                "model_name": active_model_tag,
             },
         }

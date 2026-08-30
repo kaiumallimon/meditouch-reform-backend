@@ -2,15 +2,28 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional
 from app.common.enums import UserRole
 from app.modules.agent.schemas.tools import ToolExecutionStatus, ToolResult
+from app.modules.agent.schemas.capabilities import ToolCapability
 
 class BaseTool(ABC):
-    """Abstract base class for all agent tools."""
+    """
+    Abstract base class for all agent tools.
+    Enforces explicit metadata, capabilities, permissions, and execution boundaries.
+    """
 
     name: str
     description: str
     parameters: Dict[str, Any]
-    roles_allowed: List[str] = [UserRole.USER.value, UserRole.DOCTOR.value, UserRole.ADMIN.value, UserRole.DEVELOPER.value]
+    capability: ToolCapability = ToolCapability.READ_CATALOG
+    roles_allowed: List[str] = [
+        UserRole.USER.value,
+        UserRole.DOCTOR.value,
+        UserRole.NURSE.value,
+        UserRole.ADMIN.value,
+        UserRole.DEVELOPER.value,
+    ]
+    is_mutation: bool = False
     is_destructive: bool = False
+    requires_confirmation: bool = False
 
     def is_authorized(self, caller_role: str) -> bool:
         return caller_role in self.roles_allowed
