@@ -19,11 +19,18 @@ def test_tool_registry_rbac_matrix():
     assert "get_medicine_details" in user_tool_names
     assert "suggest_medicines_for_symptoms" in user_tool_names
     assert "search_doctors" in user_tool_names
+    assert "get_my_profile" in user_tool_names
+    assert "get_my_orders" in user_tool_names
+    assert "get_my_appointments" in user_tool_names
     
     # User must NEVER see admin tools
     assert "create_user" not in user_tool_names
     assert "deactivate_user" not in user_tool_names
     assert "delete_user" not in user_tool_names
+    assert "create_doctor" not in user_tool_names
+    assert "verify_doctor" not in user_tool_names
+    assert "create_medicine" not in user_tool_names
+    assert "delete_medicine" not in user_tool_names
     assert "get_cdn_storage_stats" not in user_tool_names
 
     # 2. Admin Role sees all tools
@@ -35,6 +42,15 @@ def test_tool_registry_rbac_matrix():
     assert "create_user" in admin_tool_names
     assert "deactivate_user" in admin_tool_names
     assert "delete_user" in admin_tool_names
+    assert "create_doctor" in admin_tool_names
+    assert "verify_doctor" in admin_tool_names
+    assert "delete_doctor" in admin_tool_names
+    assert "create_medicine" in admin_tool_names
+    assert "update_medicine_stock" in admin_tool_names
+    assert "delete_medicine" in admin_tool_names
+    assert "get_platform_summary_stats" in admin_tool_names
+    assert "query_audit_logs" in admin_tool_names
+    assert "get_all_orders_admin" in admin_tool_names
     assert "get_cdn_storage_stats" in admin_tool_names
 
 @pytest.mark.asyncio
