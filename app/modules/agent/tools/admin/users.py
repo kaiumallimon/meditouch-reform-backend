@@ -64,7 +64,6 @@ class SearchUsersTool(BaseTool):
         role = arguments.get("role")
         limit = min(int(arguments.get("limit", 5)), 20)
 
-        # 1. Try exact resolution first
         if query:
             res = await self.resolver.resolve_user(query)
             if res["status"] == "EXACT_MATCH":
@@ -96,7 +95,6 @@ class SearchUsersTool(BaseTool):
                     metadata={"action": "SEARCH_USERS", "matches": len(res["candidates"])},
                 )
 
-        # 2. General search via admin repository
         users, total = await self.admin_repo.get_all_users_admin(
             search=query if query else None,
             role=role,
@@ -128,7 +126,7 @@ class SearchUsersTool(BaseTool):
 
 class CreateUserTool(BaseTool):
     name = "create_user"
-    description = "Creates a new user account with auto-generated secure password and sends email."
+    description = "Creates a new user account with auto-generated secure password and sends email. Requires admin confirmation."
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
     is_destructive = False
     parameters = {
@@ -156,26 +154,62 @@ class CreateUserTool(BaseTool):
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
 
         cmd = CreateUserCommand(**arguments)
-        req = AdminCreateUserRequest(
-            name=cmd.name,
-            phone=cmd.phone,
-            email=cmd.email,
-            role=cmd.role,
-            gender=cmd.gender,
-            address=cmd.address,
+
+        # 1. If confirmation token is provided, execute creation
+        if confirmation_token:
+            payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
+            if not payload:
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid or expired confirmation token")
+
+            cdata = payload.get("command_data", arguments)
+            req = AdminCreateUserRequest(
+                name=cdata["name"],
+                phone=cdata["phone"],
+                email=cdata.get("email"),
+                role=cdata.get("role", "USER"),
+                gender=cdata.get("gender", "unspecified"),
+                address=cdata.get("address"),
+            )
+            try:
+                user = await self.service.create_user_account(req, admin_id=caller_id)
+                return ToolResult(
+                    tool_call_id="",
+                    name=self.name,
+                    status=ToolExecutionStatus.SUCCESS,
+                    result=user.model_dump(),
+                    metadata={"action": "CREATE_USER", "resource_id": user.id, "user_name": user.name},
+                )
+            except Exception as e:
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
+
+        # 2. Otherwise, request admin confirmation
+        token = confirmation_manager.create_pending_confirmation(
+            session_id=session_id,
+            action="create_user",
+            target_type="USER",
+            target_id="new_user",
+            target_name=cmd.name,
+            summary=f"Create {cmd.role} account for {cmd.name} (Phone: {cmd.phone}, Email: {cmd.email or 'N/A'})",
+            command_data=arguments,
         )
 
-        try:
-            user = await self.service.create_user_account(req, admin_id=caller_id)
-            return ToolResult(
-                tool_call_id="",
-                name=self.name,
-                status=ToolExecutionStatus.SUCCESS,
-                result=user.model_dump(),
-                metadata={"action": "CREATE_USER", "resource_id": user.id, "user_name": user.name},
-            )
-        except Exception as e:
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
+        return ToolResult(
+            tool_call_id="",
+            name=self.name,
+            status=ToolExecutionStatus.CONFIRMATION_REQUIRED,
+            result={
+                "action": "create_user",
+                "name": cmd.name,
+                "phone": cmd.phone,
+                "email": cmd.email,
+                "role": cmd.role,
+                "gender": cmd.gender,
+                "address": cmd.address,
+            },
+            requires_confirmation=True,
+            confirmation_token=token,
+            confirmation_prompt=f"Create new {cmd.role} account for '{cmd.name}' (Phone: {cmd.phone}, Email: {cmd.email or 'N/A'})? Credentials will be auto-generated and emailed.",
+        )
 
 class DeactivateUserTool(BaseTool):
     name = "deactivate_user"
@@ -202,7 +236,6 @@ class DeactivateUserTool(BaseTool):
         if not self.is_authorized(caller_role):
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
 
-        # 1. If confirmation token is provided, execute mutation
         if confirmation_token:
             payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
             if not payload:
@@ -219,7 +252,6 @@ class DeactivateUserTool(BaseTool):
                 metadata={"action": "DEACTIVATE_USER", "resource_id": user.id},
             )
 
-        # 2. Stage 1: Disambiguate and prompt for confirmation
         query = arguments.get("query", "")
         res = await self.resolver.resolve_user(query)
         if res["status"] == "NOT_FOUND":
@@ -232,7 +264,6 @@ class DeactivateUserTool(BaseTool):
                 result={"candidates": res["candidates"], "message": f"Multiple users matched '{query}'. Please specify phone or ID."},
             )
 
-        # Exact match found -> Stage confirmation
         target = res["match"]
         token = confirmation_manager.create_pending_confirmation(
             session_id=session_id,
@@ -240,7 +271,7 @@ class DeactivateUserTool(BaseTool):
             target_type="USER",
             target_id=target["id"],
             target_name=target.get("name"),
-            summary=f"Deactivate user {target.get('name')} (Phone: {target.get('phone')}, Role: {target.get('role')})",
+            summary=f"Deactivate user {target.get('name')} (ID: {target['id']})",
             command_data={"user_id": target["id"]},
         )
 
@@ -253,22 +284,22 @@ class DeactivateUserTool(BaseTool):
                 "name": target.get("name"),
                 "phone": target.get("phone"),
                 "role": target.get("role"),
-                "current_status": "ACTIVE" if target.get("is_active", True) else "INACTIVE",
+                "current_status": "Active" if target.get("is_active", True) else "Inactive",
             },
             requires_confirmation=True,
             confirmation_token=token,
-            confirmation_prompt=f"⚠️ Found user: {target.get('name')} (Phone: {target.get('phone')}, Role: {target.get('role')}). This action will deactivate their account. Confirm?",
+            confirmation_prompt=f"🚨 DESTRUCTIVE OPERATION: Deactivate user '{target.get('name')}' (Phone: {target.get('phone')}, ID: {target['id']})? Confirm?",
         )
 
 class DeleteUserTool(BaseTool):
     name = "delete_user"
-    description = "Permanently soft-deletes a user profile. Requires explicit confirmation."
+    description = "Soft-deletes a user profile. Requires 2-step confirmation."
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
     is_destructive = True
     parameters = {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "User ID, phone, email, or name to delete"},
+            "query": {"type": "string", "description": "User identifier: ID, phone, email, or name"},
         },
         "required": ["query"],
     }

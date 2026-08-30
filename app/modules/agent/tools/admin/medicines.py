@@ -11,7 +11,7 @@ from app.common.enums import UserRole
 
 class CreateMedicineTool(BaseTool):
     name = "create_medicine"
-    description = "Adds a new medicine to the pharmacy catalog with brand name, generic, pricing, and stock."
+    description = "Adds a new medicine to the pharmacy catalog with brand name, generic, pricing, and stock. Requires admin confirmation."
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
     is_destructive = False
     parameters = {
@@ -46,45 +46,80 @@ class CreateMedicineTool(BaseTool):
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
 
         brand = arguments["brand"].strip()
-        slug = re.sub(r"[^a-zA-Z0-9]+", "-", brand.lower()).strip("-") + f"-{str(uuid.uuid4())[:6]}"
-        now = datetime.now(timezone.utc)
 
-        doc = {
-            "id": f"med_{uuid.uuid4()}",
-            "brand": brand,
-            "name": brand,
-            "medicine_name": brand,
-            "generic_name": arguments["generic_name"].strip(),
-            "dosage_form": arguments.get("dosage_form", "Tablet"),
-            "strength": arguments.get("strength", "500mg"),
-            "unit_price": float(arguments["unit_price"]),
-            "price_pack": float(arguments.get("price_pack", arguments["unit_price"] * 10)),
-            "pack_size": arguments.get("pack_size", "10x10 Tablets"),
-            "manufacturer": arguments.get("manufacturer", "Square Pharmaceuticals"),
-            "manufacturer_name": arguments.get("manufacturer", "Square Pharmaceuticals"),
-            "stock_count": int(arguments.get("stock_count", 100)),
-            "in_stock": int(arguments.get("stock_count", 100)) > 0,
-            "requires_prescription": bool(arguments.get("requires_prescription", False)),
-            "slug": slug,
-            "is_active": True,
-            "created_at": now,
-            "updated_at": now,
-        }
+        if confirmation_token:
+            payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
+            if not payload:
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid or expired confirmation token")
 
-        await self.db.medicines.insert_one(doc)
-        doc.pop("_id", None)
+            cdata = payload.get("command_data", arguments)
+            slug = re.sub(r"[^a-zA-Z0-9]+", "-", cdata["brand"].lower()).strip("-") + f"-{str(uuid.uuid4())[:6]}"
+            now = datetime.now(timezone.utc)
+
+            doc = {
+                "id": f"med_{uuid.uuid4()}",
+                "brand": cdata["brand"],
+                "name": cdata["brand"],
+                "medicine_name": cdata["brand"],
+                "generic_name": cdata["generic_name"].strip(),
+                "dosage_form": cdata.get("dosage_form", "Tablet"),
+                "strength": cdata.get("strength", "500mg"),
+                "unit_price": float(cdata["unit_price"]),
+                "price_pack": float(cdata.get("price_pack", float(cdata["unit_price"]) * 10)),
+                "pack_size": cdata.get("pack_size", "10x10 Tablets"),
+                "manufacturer": cdata.get("manufacturer", "Square Pharmaceuticals"),
+                "manufacturer_name": cdata.get("manufacturer", "Square Pharmaceuticals"),
+                "stock_count": int(cdata.get("stock_count", 100)),
+                "in_stock": int(cdata.get("stock_count", 100)) > 0,
+                "requires_prescription": bool(cdata.get("requires_prescription", False)),
+                "slug": slug,
+                "is_active": True,
+                "created_at": now,
+                "updated_at": now,
+            }
+
+            await self.db.medicines.insert_one(doc)
+            doc.pop("_id", None)
+
+            return ToolResult(
+                tool_call_id="",
+                name=self.name,
+                status=ToolExecutionStatus.SUCCESS,
+                result=doc,
+                metadata={"action": "CREATE_MEDICINE", "medicine_id": doc["id"], "brand": brand},
+            )
+
+        token = confirmation_manager.create_pending_confirmation(
+            session_id=session_id,
+            action="create_medicine",
+            target_type="MEDICINE",
+            target_id="new_medicine",
+            target_name=brand,
+            summary=f"Add medicine {brand} ({arguments['generic_name']}, ৳{arguments['unit_price']}/unit, Stock: {arguments.get('stock_count', 100)})",
+            command_data=arguments,
+        )
 
         return ToolResult(
             tool_call_id="",
             name=self.name,
-            status=ToolExecutionStatus.SUCCESS,
-            result=doc,
-            metadata={"action": "CREATE_MEDICINE", "medicine_id": doc["id"], "brand": brand},
+            status=ToolExecutionStatus.CONFIRMATION_REQUIRED,
+            result={
+                "action": "create_medicine",
+                "brand": brand,
+                "generic_name": arguments["generic_name"],
+                "dosage_form": arguments.get("dosage_form", "Tablet"),
+                "strength": arguments.get("strength", "500mg"),
+                "unit_price": arguments["unit_price"],
+                "stock_count": arguments.get("stock_count", 100),
+            },
+            requires_confirmation=True,
+            confirmation_token=token,
+            confirmation_prompt=f"Add new medicine '{brand}' ({arguments['generic_name']}, Unit Price: ৳{arguments['unit_price']}, Initial Stock: {arguments.get('stock_count', 100)}) to the pharmacy catalog? Confirm?",
         )
 
 class UpdateMedicineStockTool(BaseTool):
     name = "update_medicine_stock"
-    description = "Updates the inventory stock count for a medicine."
+    description = "Updates the inventory stock count for a medicine. Requires admin confirmation."
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
     is_destructive = False
     parameters = {
@@ -129,24 +164,58 @@ class UpdateMedicineStockTool(BaseTool):
         else:
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Please specify either new_stock or quantity_delta.")
 
-        now = datetime.now(timezone.utc)
-        await self.db.medicines.update_one(
-            {"id": med["id"]},
-            {"$set": {"stock_count": final_stock, "in_stock": final_stock > 0, "updated_at": now}}
+        if confirmation_token:
+            payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
+            if not payload:
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid or expired confirmation token")
+
+            cdata = payload.get("command_data", {})
+            stock_to_apply = cdata.get("final_stock", final_stock)
+
+            now = datetime.now(timezone.utc)
+            await self.db.medicines.update_one(
+                {"id": med["id"]},
+                {"$set": {"stock_count": stock_to_apply, "in_stock": stock_to_apply > 0, "updated_at": now}}
+            )
+
+            return ToolResult(
+                tool_call_id="",
+                name=self.name,
+                status=ToolExecutionStatus.SUCCESS,
+                result={
+                    "id": med["id"],
+                    "brand": med.get("brand"),
+                    "previous_stock": current_stock,
+                    "new_stock": stock_to_apply,
+                    "in_stock": stock_to_apply > 0,
+                },
+                metadata={"action": "UPDATE_STOCK", "medicine_id": med["id"]},
+            )
+
+        token = confirmation_manager.create_pending_confirmation(
+            session_id=session_id,
+            action="update_medicine_stock",
+            target_type="MEDICINE",
+            target_id=med["id"],
+            target_name=med.get("brand"),
+            summary=f"Update stock for {med.get('brand')} from {current_stock} to {final_stock}",
+            command_data={"medicine_id": med["id"], "final_stock": final_stock},
         )
 
         return ToolResult(
             tool_call_id="",
             name=self.name,
-            status=ToolExecutionStatus.SUCCESS,
+            status=ToolExecutionStatus.CONFIRMATION_REQUIRED,
             result={
-                "id": med["id"],
+                "action": "update_medicine_stock",
+                "medicine_id": med["id"],
                 "brand": med.get("brand"),
-                "previous_stock": current_stock,
-                "new_stock": final_stock,
-                "in_stock": final_stock > 0,
+                "current_stock": current_stock,
+                "proposed_stock": final_stock,
             },
-            metadata={"action": "UPDATE_STOCK", "medicine_id": med["id"]},
+            requires_confirmation=True,
+            confirmation_token=token,
+            confirmation_prompt=f"Update inventory stock for '{med.get('brand')}' from {current_stock} units to {final_stock} units? Confirm?",
         )
 
 class DeleteMedicineTool(BaseTool):

@@ -14,7 +14,7 @@ import uuid
 
 class CreateDoctorTool(BaseTool):
     name = "create_doctor"
-    description = "Registers a new doctor profile with BMDC number, specialties, qualifications, and consultation fee."
+    description = "Registers a new doctor profile with BMDC number, specialties, qualifications, and consultation fee. Requires admin confirmation."
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
     is_destructive = False
     parameters = {
@@ -50,32 +50,66 @@ class CreateDoctorTool(BaseTool):
         if not self.is_authorized(caller_role):
             return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.PERMISSION_DENIED, result=None, error_message="Admin privileges required")
 
-        req = CreateDoctorAccountRequest(
-            name=arguments["name"],
-            phone=arguments["phone"],
-            email=arguments["email"],
-            bmdc_reg_number=arguments["bmdc_reg_number"],
-            specialties=arguments.get("specialties", ["General Medicine"]),
-            qualifications=arguments.get("qualifications", ["MBBS"]),
-            consultation_fee=float(arguments["consultation_fee"]),
-            experience_years=int(arguments.get("experience_years", 5)),
+        if confirmation_token:
+            payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
+            if not payload:
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid or expired confirmation token")
+
+            cdata = payload.get("command_data", arguments)
+            req = CreateDoctorAccountRequest(
+                name=cdata["name"],
+                phone=cdata["phone"],
+                email=cdata["email"],
+                bmdc_reg_number=cdata["bmdc_reg_number"],
+                specialties=cdata.get("specialties", ["General Medicine"]),
+                qualifications=cdata.get("qualifications", ["MBBS"]),
+                consultation_fee=float(cdata["consultation_fee"]),
+                experience_years=int(cdata.get("experience_years", 5)),
+            )
+
+            try:
+                doc = await self.service.create_doctor_account(req, admin_id=caller_id)
+                return ToolResult(
+                    tool_call_id="",
+                    name=self.name,
+                    status=ToolExecutionStatus.SUCCESS,
+                    result=doc.model_dump(),
+                    metadata={"action": "CREATE_DOCTOR", "doctor_id": doc.id, "doctor_name": doc.name},
+                )
+            except Exception as e:
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
+
+        token = confirmation_manager.create_pending_confirmation(
+            session_id=session_id,
+            action="create_doctor",
+            target_type="DOCTOR",
+            target_id="new_doctor",
+            target_name=arguments["name"],
+            summary=f"Register Dr. {arguments['name']} (BMDC: {arguments['bmdc_reg_number']}, Fee: ৳{arguments['consultation_fee']})",
+            command_data=arguments,
         )
 
-        try:
-            doc = await self.service.create_doctor_account(req, admin_id=caller_id)
-            return ToolResult(
-                tool_call_id="",
-                name=self.name,
-                status=ToolExecutionStatus.SUCCESS,
-                result=doc.model_dump(),
-                metadata={"action": "CREATE_DOCTOR", "doctor_id": doc.id, "doctor_name": doc.name},
-            )
-        except Exception as e:
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
+        return ToolResult(
+            tool_call_id="",
+            name=self.name,
+            status=ToolExecutionStatus.CONFIRMATION_REQUIRED,
+            result={
+                "action": "create_doctor",
+                "name": arguments["name"],
+                "bmdc": arguments["bmdc_reg_number"],
+                "specialties": arguments.get("specialties", ["General Medicine"]),
+                "consultation_fee": arguments["consultation_fee"],
+                "phone": arguments["phone"],
+                "email": arguments["email"],
+            },
+            requires_confirmation=True,
+            confirmation_token=token,
+            confirmation_prompt=f"Register new doctor '{arguments['name']}' (BMDC: {arguments['bmdc_reg_number']}, Fee: ৳{arguments['consultation_fee']})? Account credentials will be emailed to {arguments['email']}.",
+        )
 
 class VerifyDoctorTool(BaseTool):
     name = "verify_doctor"
-    description = "Updates the verification status of a doctor account (VERIFIED or REJECTED)."
+    description = "Updates the verification status of a doctor account (VERIFIED or REJECTED). Requires admin confirmation."
     roles_allowed = [UserRole.ADMIN.value, UserRole.DEVELOPER.value]
     is_destructive = False
     parameters = {
@@ -110,23 +144,48 @@ class VerifyDoctorTool(BaseTool):
         status_str = arguments["status"].upper()
         rejection_reason = arguments.get("rejection_reason")
 
-        try:
-            status_enum = DoctorVerificationStatus(status_str)
-            doc = await self.service.verify_doctor(
-                doctor_id=doctor_id,
-                status=status_enum,
-                rejection_reason=rejection_reason,
-                admin_id=caller_id,
-            )
-            return ToolResult(
-                tool_call_id="",
-                name=self.name,
-                status=ToolExecutionStatus.SUCCESS,
-                result=doc.model_dump(),
-                metadata={"action": "VERIFY_DOCTOR", "doctor_id": doc.id, "status": status_str},
-            )
-        except Exception as e:
-            return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
+        if confirmation_token:
+            payload = confirmation_manager.validate_and_consume(confirmation_token, session_id)
+            if not payload:
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message="Invalid or expired confirmation token")
+
+            try:
+                status_enum = DoctorVerificationStatus(status_str)
+                doc = await self.service.verify_doctor(
+                    doctor_id=doctor_id,
+                    status=status_enum,
+                    rejection_reason=rejection_reason,
+                    admin_id=caller_id,
+                )
+                return ToolResult(
+                    tool_call_id="",
+                    name=self.name,
+                    status=ToolExecutionStatus.SUCCESS,
+                    result=doc.model_dump(),
+                    metadata={"action": "VERIFY_DOCTOR", "doctor_id": doc.id, "status": status_str},
+                )
+            except Exception as e:
+                return ToolResult(tool_call_id="", name=self.name, status=ToolExecutionStatus.ERROR, result=None, error_message=str(e))
+
+        token = confirmation_manager.create_pending_confirmation(
+            session_id=session_id,
+            action="verify_doctor",
+            target_type="DOCTOR",
+            target_id=doctor_id,
+            target_name=doctor_id,
+            summary=f"Set doctor {doctor_id} status to {status_str}",
+            command_data=arguments,
+        )
+
+        return ToolResult(
+            tool_call_id="",
+            name=self.name,
+            status=ToolExecutionStatus.CONFIRMATION_REQUIRED,
+            result={"doctor_id": doctor_id, "new_status": status_str, "reason": rejection_reason},
+            requires_confirmation=True,
+            confirmation_token=token,
+            confirmation_prompt=f"Update verification status of Doctor '{doctor_id}' to {status_str}? Confirm?",
+        )
 
 class DeleteDoctorTool(BaseTool):
     name = "delete_doctor"
