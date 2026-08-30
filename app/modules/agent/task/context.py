@@ -215,18 +215,17 @@ class AgentTaskContextRepository:
 
     def build_task_context_injection(self, task: Dict[str, Any]) -> str:
         """
-        Builds a structured system injection block telling the LLM what the
-        original intent is and what context has been collected so far.
-        This is prepended to the conversation as a priority system message.
+        Builds a compact structured system injection for the LLM.
+        Kept intentionally short to avoid token limit issues on small Groq quotas.
         """
+        original = task.get("original_request", "")
+        primary = task.get("primary_complaint", "unknown")
+
         lines = [
-            "════════════════════════════════════════",
-            "ACTIVE TASK CONTEXT (read carefully before responding)",
-            "════════════════════════════════════════",
-            "",
-            f"Original user request: \"{task.get('original_request', '')}\"",
-            f"Primary complaint: {task.get('primary_complaint', 'unknown')}",
-            "",
+            "[ACTIVE TASK]",
+            f'Original request: "{original}"',
+            f"Primary complaint: {primary}",
+            "Do NOT change primary complaint unless user explicitly says to.",
         ]
 
         ctx_dict = task.get("clinical_context") or {}
@@ -234,26 +233,12 @@ class AgentTaskContextRepository:
             ctx = ClinicalContext.model_validate(ctx_dict)
             ctx_str = ctx.to_context_string()
             if ctx_str and ctx_str != "No structured clinical context yet.":
-                lines.append("Collected clinical information:")
+                lines.append("Collected info:")
                 lines.append(ctx_str)
-                lines.append("")
         except Exception:
             pass
 
-        sec = task.get("secondary_complaints") or []
-        if sec:
-            lines.append(f"Secondary complaints (do NOT confuse with primary): {', '.join(sec)}")
-            lines.append("")
-
-        lines += [
-            "INVARIANTS YOU MUST FOLLOW:",
-            "1. You are continuing to solve the ORIGINAL REQUEST above.",
-            "2. The primary complaint does NOT change unless the user explicitly says so (e.g. 'forget the cough').",
-            "3. Any new symptom the user mentions is an ASSOCIATED symptom, not a new primary complaint.",
-            "4. Use all the collected information above as context to evaluate the primary complaint.",
-            "5. Do NOT call assess_symptom_safety again with a different symptom as the main subject.",
-            "════════════════════════════════════════",
-        ]
-
+        lines.append("Continue solving the original request using all collected info above.")
         return "\n".join(lines)
+
 

@@ -1,5 +1,6 @@
 import json
 import time
+import inspect
 import hashlib
 from typing import AsyncGenerator, List, Dict, Any, Optional
 from app.modules.agent.schemas.chat import AgentState, StreamEventType, SessionType
@@ -244,15 +245,27 @@ class AgentOrchestrator:
                             status = ToolExecutionStatus.PERMISSION_DENIED
                             res_data = {"error": auth_err or "Permission denied."}
                         else:
+                            # Build extra kwargs selectively — only pass what the tool's signature accepts
+                            _sig = inspect.signature(tool.execute)
+                            _extra_kwargs: Dict[str, Any] = {}
+                            _has_var_kw = any(
+                                p.kind == inspect.Parameter.VAR_KEYWORD
+                                for p in _sig.parameters.values()
+                            )
+                            _named = set(_sig.parameters)
+                            if _has_var_kw or "original_user_message" in _named:
+                                _extra_kwargs["original_user_message"] = user_message
+                            if _has_var_kw or "task_context" in _named:
+                                if task_context:
+                                    _extra_kwargs["task_context"] = task_context
+
                             tool_res = await tool.execute(
                                 arguments=args,
                                 caller_id=user_id,
                                 caller_role=user_role,
                                 session_id=session_id,
                                 confirmation_token=confirmation_token,
-                                # Inject task_context so tools like AssessSymptomSafetyTool
-                                # can access original_request and primary_complaint
-                                **({"task_context": task_context} if task_context else {}),
+                                **_extra_kwargs,
                             )
                             status = tool_res.status
                             res_data = tool_res.result or {"error": tool_res.error_message}

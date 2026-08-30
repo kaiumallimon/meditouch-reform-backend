@@ -36,6 +36,8 @@ class BaseTool(ABC):
         caller_role: str,
         session_id: str,
         confirmation_token: Optional[str] = None,
+        original_user_message: Optional[str] = None,
+        **kwargs: Any,
     ) -> ToolResult:
         """Executes the tool logic against the domain service layer."""
         pass

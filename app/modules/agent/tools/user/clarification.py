@@ -4,12 +4,18 @@ from app.modules.agent.tools.base import BaseTool
 from app.modules.agent.schemas.tools import ToolExecutionStatus, ToolResult
 from app.modules.agent.schemas.capabilities import ToolCapability
 from app.modules.agent.security.clarifications import AgentClarificationRepository
+from app.modules.agent.security.medical_safety import _classify_primary_symptom
 from app.common.enums import UserRole
+
 
 class RequestClarificationTool(BaseTool):
     """
     Allows the agent to ask the user structured clarification questions.
     Executing this tool pauses the agent loop and returns an interactive form to the user.
+
+    CRITICAL: When the LLM calls this tool, the orchestrator passes `original_user_message`
+    so the clarification record can store the user's verbatim original intent.
+    Without this, the continuation run after submission has no way to restore the original request.
     """
 
     name = "request_clarification"
@@ -82,6 +88,8 @@ class RequestClarificationTool(BaseTool):
         caller_role: str,
         session_id: str,
         confirmation_token: Optional[str] = None,
+        original_user_message: Optional[str] = None,
+        **kwargs: Any,
     ) -> ToolResult:
         message = arguments.get("message", "I need a little more information before I can safely answer.")
         questions = arguments.get("questions", [])
@@ -95,6 +103,19 @@ class RequestClarificationTool(BaseTool):
                 error_message="At least one clarification question is required.",
             )
 
+        # Extract primary_complaint from the original user message (passed by orchestrator)
+        # This is critical: without it, the continuation run after submission sees primary_complaint=None
+        primary_complaint: Optional[str] = None
+        if original_user_message:
+            primary_complaint = _classify_primary_symptom(original_user_message.lower())
+
+        # Also check task_context if provided
+        task_context = kwargs.get("task_context")
+        if task_context and not primary_complaint:
+            primary_complaint = task_context.get("primary_complaint")
+        if task_context and not original_user_message:
+            original_user_message = task_context.get("original_request")
+
         clarif_id = "clarif_sim"
         if self.db is not None:
             repo = AgentClarificationRepository(self.db)
@@ -103,6 +124,10 @@ class RequestClarificationTool(BaseTool):
                 session_id=session_id,
                 message=message,
                 questions=questions,
+                # Intent preservation — passed by orchestrator from the current user_message
+                original_message=original_user_message,
+                primary_complaint=primary_complaint,
+                intent_type="symptom_medication_request" if primary_complaint else "general_query",
             )
 
         payload = {
@@ -124,6 +149,10 @@ class RequestClarificationTool(BaseTool):
             requires_clarification=True,
             clarification_id=clarif_id,
             clarification_payload=payload,
-            metadata={"action": "REQUEST_CLARIFICATION", "question_count": len(questions)},
+            metadata={
+                "action": "REQUEST_CLARIFICATION",
+                "question_count": len(questions),
+                "primary_complaint": primary_complaint,
+                "original_message": original_user_message,
+            },
         )
-

@@ -328,8 +328,8 @@ def test_task_context_injection_string():
         "secondary_complaints": [],
     }
     injection = repo.build_task_context_injection(task)
-    assert "ACTIVE TASK CONTEXT" in injection
+    assert "ACTIVE TASK" in injection
     assert "I'm having cough, what medicine should I take?" in injection
     assert "cough" in injection
-    assert "INVARIANTS YOU MUST FOLLOW" in injection
+    assert "primary complaint" in injection.lower()
     assert "primary complaint" in injection.lower()

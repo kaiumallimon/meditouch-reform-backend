@@ -78,8 +78,10 @@ class AssessSymptomSafetyTool(BaseTool):
         caller_role: str,
         session_id: str,
         confirmation_token: Optional[str] = None,
-        # Task context injected by the orchestrator for continuation runs
+        original_user_message: Optional[str] = None,
+        # Task context injected by orchestrator for continuation runs
         task_context: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
     ) -> ToolResult:
         symptoms_text = arguments.get("symptoms_description", "").strip()
         if not symptoms_text:
