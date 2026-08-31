@@ -157,7 +157,11 @@ class PharmacyService:
             )
 
         # Fallback to catalogue search
-        med = await self.repo.get_by_slug(slug)
+        med = await self.repo.find_by_id_or_slug(slug)
+        if not med:
+            med = await self.repo.get_by_slug(slug)
+        if not med:
+            med = await self.repo.get_by_id(slug)
         if not med:
             raise NotFoundException(f"Medicine details for '{slug}' not found")
 
@@ -187,6 +191,9 @@ class PharmacyService:
             medicine_details={},
             related_medicines=[]
         )
+
+    async def get_medicine_detail(self, slug: str) -> MedicineDetailResponse:
+        return await self.get_medicine_details(slug)
 
     async def get_categories_summary(self) -> List[CategorySummaryResponse]:
         summary = await self.repo.get_categories_summary()

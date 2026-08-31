@@ -67,6 +67,14 @@ async def search_medicines(
     res = await service.search_catalog(filters, pagination)
     return APIResponse(success=True, message="Medicines retrieved", data=res)
 
+@router.get("/medicines/{slug}/details", response_model=APIResponse[MedicineDetailResponse])
+async def get_medicine_details(
+    slug: str,
+    service: PharmacyService = Depends(get_pharmacy_service)
+):
+    detail = await service.get_medicine_details(slug)
+    return APIResponse(success=True, message="Medicine monograph details retrieved", data=detail)
+
 @router.get("/medicines/{slug_or_id}", response_model=APIResponse[MedicineResponse])
 async def get_medicine(
     slug_or_id: str,
@@ -74,14 +82,6 @@ async def get_medicine(
 ):
     med = await service.get_medicine_by_id_or_slug(slug_or_id)
     return APIResponse(success=True, message="Medicine retrieved", data=med)
-
-@router.get("/medicines/{slug}/details", response_model=APIResponse[MedicineDetailResponse])
-async def get_medicine_details(
-    slug: str,
-    service: PharmacyService = Depends(get_pharmacy_service)
-):
-    detail = await service.get_medicine_detail(slug)
-    return APIResponse(success=True, message="Medicine monograph details retrieved", data=detail)
 
 @router.get("/categories", response_model=APIResponse[List[CategorySummaryResponse]])
 async def get_categories(

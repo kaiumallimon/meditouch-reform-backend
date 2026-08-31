@@ -22,7 +22,10 @@ class PharmacyRepository:
         return await self.db.medicines.find_one({"$or": [{"id": identifier}, {"slug": identifier}]})
 
     async def get_detail_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
-        return await self.db.medicine_details.find_one({"slug": slug})
+        return await self.db.medicine_details.find_one({"$or": [{"slug": slug}, {"id": slug}, {"medicine_id": slug}]})
+
+    async def get_details_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
+        return await self.get_detail_by_slug(slug)
 
     async def search_medicines(
         self,
