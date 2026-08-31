@@ -13,7 +13,7 @@ class PharmacyRepository:
         self.db = db
 
     async def get_by_id(self, medicine_id: str) -> Optional[Dict[str, Any]]:
-        return await self.db.medicines.find_one({"id": medicine_id})
+        return await self.db.medicines.find_one({"$or": [{"id": medicine_id}, {"slug": medicine_id}]})
 
     async def get_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
         return await self.db.medicines.find_one({"slug": slug})

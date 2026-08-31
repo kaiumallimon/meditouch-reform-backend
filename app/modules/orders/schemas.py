@@ -19,6 +19,7 @@ class CartItemDetail(BaseModel):
     requires_prescription: bool
     in_stock: bool
     stock_count: int
+    image: Optional[str] = None
 
 class CartResponse(BaseModel):
     user_id: str
@@ -42,6 +43,7 @@ class OrderItemDetail(BaseModel):
     unit_price: float
     quantity: int
     total_price: float
+    image: Optional[str] = None
 
 class TrackingEvent(BaseModel):
     status: OrderStatus

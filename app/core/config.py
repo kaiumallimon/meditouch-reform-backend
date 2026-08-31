@@ -64,7 +64,7 @@ class Settings(BaseSettings):
 
     # Business Logic Constants
     PLATFORM_FEE_PERCENTAGE: float = 10.0
-    PLATFORM_DELIVERY_FEE_BDT: float = 60.0
+    PLATFORM_DELIVERY_FEE_BDT: float = 85.0
     APPOINTMENT_JOINABLE_WINDOW_BEFORE_MINUTES: int = 5
     APPOINTMENT_JOINABLE_WINDOW_AFTER_MINUTES: int = 30
 

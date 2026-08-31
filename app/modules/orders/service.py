@@ -110,6 +110,9 @@ class OrderService:
             if req_presc:
                 has_prescription = True
 
+            images_list = med.get("medicine_images") or []
+            first_img = images_list[0] if (isinstance(images_list, list) and images_list) else None
+            med_img = med.get("medicine_image") or med.get("image") or first_img
             stock_count = int(med.get("stock_count", 0))
 
             detailed_items.append(
@@ -123,7 +126,8 @@ class OrderService:
                     total_price=item_total,
                     requires_prescription=req_presc,
                     in_stock=stock_count >= qty,
-                    stock_count=stock_count
+                    stock_count=stock_count,
+                    image=med_img
                 )
             )
 
@@ -228,7 +232,8 @@ class OrderService:
                             strength=item.strength,
                             unit_price=item.unit_price,
                             quantity=item.quantity,
-                            total_price=item.total_price
+                            total_price=item.total_price,
+                            image=item.image
                         )
                     )
             except Exception as ex:
