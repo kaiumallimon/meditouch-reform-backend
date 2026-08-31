@@ -25,8 +25,8 @@ async def test_atomic_stock_reservation_race_condition():
 
     async def mock_find_one_and_update(filter_dict, update_dict, return_document=None):
         med_id = filter_dict.get('id')
-        min_stock = filter_dict.get('stock_count', {}).get('', 0)
-        inc_val = update_dict.get('', {}).get('stock_count', 0)
+        min_stock = filter_dict.get('stock_count', {}).get('$gte', 0)
+        inc_val = update_dict.get('$inc', {}).get('stock_count', 0)
 
         current = stock_state.get(med_id, 0)
         if current >= min_stock:
@@ -35,7 +35,7 @@ async def test_atomic_stock_reservation_race_condition():
         return None
 
     mock_db.medicines.find_one_and_update.side_effect = mock_find_one_and_update
-    mock_db.medicines.find_one.side_effect = lambda filter_dict: {'id': filter_dict.get('id'), 'stock_count': stock_state.get(filter_dict.get('id'), 0)}
+    mock_db.medicines.find_one = AsyncMock(side_effect=lambda filter_dict: {'id': filter_dict.get('id'), 'stock_count': stock_state.get(filter_dict.get('id'), 0)})
     mock_db.medicines.update_one = AsyncMock()
     mock_db.users.find_one = AsyncMock(return_value={'id': 'user_1', 'name': 'Person A', 'phone': '01711111111', 'addresses': []})
     mock_db.users.update_one = AsyncMock()
@@ -132,7 +132,7 @@ async def test_order_cancellation_lifecycle_and_stock_restoration():
     assert cancel_res.status == OrderStatus.CANCELLED
     mock_db.medicines.update_one.assert_called_with(
         {'id': 'med_1'},
-        {'': {'stock_count': 5}, '': {'in_stock': True}}
+        {'$inc': {'stock_count': 5}, '$set': {'in_stock': True}}
     )
 
     mock_order_repo.get_order_by_id.return_value = {
