@@ -341,3 +341,72 @@ class PharmacyService:
                 details={"deleted_count": count, "targets": ids_or_slugs[:20]}
             )
         return count
+
+    # =========================================================================
+    # Admin Inventory & Stock Management
+    # =========================================================================
+    async def update_stock(
+        self,
+        medicine_id_or_slug: str,
+        stock_count: int,
+        in_stock: Optional[bool] = None,
+        admin_id: Optional[str] = None
+    ) -> MedicineResponse:
+        med = await self.repo.find_by_id_or_slug(medicine_id_or_slug)
+        if not med:
+            raise NotFoundException("Medicine not found")
+
+        med_id = med.get("id") or medicine_id_or_slug
+        resolved_in_stock = in_stock if in_stock is not None else (stock_count > 0)
+
+        updates = {
+            "stock_count": stock_count,
+            "in_stock": resolved_in_stock,
+            "is_available": resolved_in_stock
+        }
+
+        updated = await self.repo.update_medicine(med_id, updates)
+        if not updated:
+            raise NotFoundException("Medicine not found")
+
+        await log_audit_event(
+            self.db,
+            user_id=admin_id,
+            action=AuditAction.MEDICINE_UPDATED,
+            target_type="INVENTORY",
+            target_id=med_id,
+            details={"brand": updated.get("brand"), "stock_count": stock_count, "in_stock": resolved_in_stock}
+        )
+
+        return MedicineResponse(**updated)
+
+    async def batch_update_stock(
+        self,
+        items: List[Dict[str, Any]],
+        admin_id: Optional[str] = None
+    ) -> int:
+        updated_count = 0
+        for it in items:
+            med_id = it.get("medicine_id")
+            stock_count = it.get("stock_count", 0)
+            if not med_id:
+                continue
+            in_stock = stock_count > 0
+            res = await self.db.medicines.update_one(
+                {"id": med_id},
+                {"$set": {"stock_count": stock_count, "in_stock": in_stock, "is_available": in_stock}}
+            )
+            if res.modified_count > 0:
+                updated_count += 1
+
+        if updated_count > 0:
+            await log_audit_event(
+                self.db,
+                user_id=admin_id,
+                action=AuditAction.MEDICINE_UPDATED,
+                target_type="INVENTORY",
+                target_id="BATCH",
+                details={"updated_count": updated_count}
+            )
+
+        return updated_count

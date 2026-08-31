@@ -74,3 +74,11 @@ class UpdateOrderStatusRequest(BaseModel):
     status: OrderStatus
     tracking_note: Optional[str] = None
 
+class CancelOrderRequest(BaseModel):
+    reason: Optional[str] = "Cancelled by user"
+
+class RealtimeOrderEvent(BaseModel):
+    event_type: str # "order_created", "order_updated", "order_cancelled"
+    order: OrderResponse
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+

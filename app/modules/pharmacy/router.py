@@ -220,3 +220,34 @@ async def delete_medicines_bulk(
     count = await service.delete_medicines_bulk(ids, admin_id=payload["sub"])
     return APIResponse(success=True, message=f"Successfully deleted {count} medicines", data={"deleted_count": count})
 
+@router.put("/admin/medicines/{medicine_id_or_slug}/stock", response_model=APIResponse[MedicineResponse])
+async def update_medicine_stock(
+    medicine_id_or_slug: str,
+    req: StockUpdateRequest,
+    payload: dict = Depends(get_current_user_payload),
+    service: PharmacyService = Depends(get_pharmacy_service)
+):
+    if payload.get("role") != UserRole.ADMIN.value:
+        raise ForbiddenException("Only ADMIN can update medicine stock levels")
+    med = await service.update_stock(
+        medicine_id_or_slug=medicine_id_or_slug,
+        stock_count=req.stock_count,
+        in_stock=req.in_stock,
+        admin_id=payload["sub"]
+    )
+    return APIResponse(success=True, message="Medicine stock updated successfully", data=med)
+
+@router.post("/admin/inventory/batch-update", response_model=APIResponse[dict])
+async def batch_update_inventory(
+    req: BatchStockUpdateRequest,
+    payload: dict = Depends(get_current_user_payload),
+    service: PharmacyService = Depends(get_pharmacy_service)
+):
+    if payload.get("role") != UserRole.ADMIN.value:
+        raise ForbiddenException("Only ADMIN can batch update inventory")
+    updated_count = await service.batch_update_stock(
+        items=[it.model_dump() for it in req.items],
+        admin_id=payload["sub"]
+    )
+    return APIResponse(success=True, message=f"Successfully updated stock for {updated_count} medicines", data={"updated_count": updated_count})
+

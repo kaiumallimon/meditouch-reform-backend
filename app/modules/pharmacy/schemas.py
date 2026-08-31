@@ -144,3 +144,14 @@ class PharmacyStatsResponse(BaseModel):
     total_manufacturers: int
     last_crawled_at: Optional[datetime] = None
     crawler_status: str
+
+class StockUpdateRequest(BaseModel):
+    stock_count: int = Field(..., ge=0)
+    in_stock: Optional[bool] = None
+
+class BatchStockItem(BaseModel):
+    medicine_id: str
+    stock_count: int = Field(..., ge=0)
+
+class BatchStockUpdateRequest(BaseModel):
+    items: List[BatchStockItem] = Field(..., min_length=1)

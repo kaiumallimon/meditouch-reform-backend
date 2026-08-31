@@ -64,6 +64,14 @@ class UserService:
 
         return await self.get_user_details(user_id)
 
+    async def get_addresses(self, user_id: str) -> list[AddressSchema]:
+        addresses = await self.repo.get_addresses(user_id)
+        return [AddressSchema(**a) for a in addresses]
+
     async def add_address(self, user_id: str, address_req: AddressSchema) -> list[AddressSchema]:
         addresses = await self.repo.add_address(user_id, address_req.model_dump())
+        return [AddressSchema(**a) for a in addresses]
+
+    async def delete_address(self, user_id: str, address_id: str) -> list[AddressSchema]:
+        addresses = await self.repo.delete_address(user_id, address_id)
         return [AddressSchema(**a) for a in addresses]

@@ -15,6 +15,10 @@ class UserManagementRepository:
         await self.db.users.update_one({"id": user_id}, {"$set": updates})
         return await self.get_by_id(user_id)
 
+    async def get_addresses(self, user_id: str) -> List[Dict[str, Any]]:
+        user = await self.get_by_id(user_id)
+        return user.get("addresses", []) if user else []
+
     async def add_address(self, user_id: str, address: Dict[str, Any]) -> List[Dict[str, Any]]:
         if "id" not in address or not address["id"]:
             address["id"] = str(uuid.uuid4())
@@ -32,4 +36,15 @@ class UserManagementRepository:
         )
         user = await self.get_by_id(user_id)
         return user.get("addresses", [])
+
+    async def delete_address(self, user_id: str, address_id: str) -> List[Dict[str, Any]]:
+        await self.db.users.update_one(
+            {"id": user_id},
+            {
+                "$pull": {"addresses": {"id": address_id}},
+                "$set": {"updated_at": datetime.now(timezone.utc)}
+            }
+        )
+        user = await self.get_by_id(user_id)
+        return user.get("addresses", []) if user else []
 

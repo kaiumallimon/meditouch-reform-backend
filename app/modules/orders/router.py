@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query, status
+from fastapi.responses import StreamingResponse
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.db.mongodb import get_db
@@ -12,7 +13,8 @@ from app.modules.orders.schemas import (
     CartResponse,
     CheckoutRequest,
     OrderResponse,
-    UpdateOrderStatusRequest
+    UpdateOrderStatusRequest,
+    CancelOrderRequest
 )
 from app.common.pagination import PaginationParams, PaginatedResponse
 from app.common.responses import APIResponse
@@ -70,7 +72,7 @@ async def checkout_order(
     service: OrderService = Depends(get_order_service)
 ):
     order = await service.checkout(payload["sub"], req)
-    return APIResponse(success=True, message="Order created. Proceed to payment.", data=order)
+    return APIResponse(success=True, message="Order confirmed and placed successfully", data=order)
 
 @router.get("/my-orders", response_model=APIResponse[PaginatedResponse[OrderResponse]])
 async def get_my_orders(
@@ -84,11 +86,27 @@ async def get_my_orders(
     orders = await service.get_user_orders(payload["sub"], status, pagination)
     return APIResponse(success=True, message="My orders retrieved", data=orders)
 
+@router.get("/admin/stream")
+async def stream_admin_orders(
+    service: OrderService = Depends(get_order_service)
+):
+    """Real-time SSE event stream for admin order dashboard."""
+    generator = await service.get_orders_stream()
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
 @router.get("/admin/all", response_model=APIResponse[PaginatedResponse[OrderResponse]])
 async def get_all_orders_admin(
     status: Optional[OrderStatus] = Query(None),
     page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=100),
     payload: dict = Depends(get_current_user_payload),
     service: OrderService = Depends(get_order_service)
 ):
@@ -106,6 +124,22 @@ async def get_order_details(
 ):
     order = await service.get_order_by_id(order_id, payload["sub"], payload.get("role", ""))
     return APIResponse(success=True, message="Order details retrieved", data=order)
+
+@router.post("/{order_id}/cancel", response_model=APIResponse[OrderResponse])
+async def cancel_order(
+    order_id: str,
+    req: Optional[CancelOrderRequest] = None,
+    payload: dict = Depends(get_current_user_payload),
+    service: OrderService = Depends(get_order_service)
+):
+    reason = req.reason if req else "Cancelled by customer"
+    order = await service.cancel_order(
+        order_id=order_id,
+        user_id=payload["sub"],
+        user_role=payload.get("role", ""),
+        reason=reason
+    )
+    return APIResponse(success=True, message="Order cancelled successfully and stock restored", data=order)
 
 @router.put("/{order_id}/status", response_model=APIResponse[OrderResponse])
 async def update_order_status(

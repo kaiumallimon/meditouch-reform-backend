@@ -1,6 +1,9 @@
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, AsyncGenerator
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo import ReturnDocument
 from datetime import datetime, timezone
+import asyncio
+import json
 import uuid
 
 from app.modules.orders.repository import OrderRepository
@@ -18,7 +21,6 @@ from app.modules.orders.schemas import (
 )
 from app.common.enums import (
     OrderStatus,
-    PaymentTargetType,
     UserRole,
     NotificationType,
     AuditAction
@@ -32,7 +34,44 @@ from app.core.exceptions import (
     ForbiddenException,
     OutOfStockException
 )
-from app.core.logging import log_audit_event
+from app.core.logging import log_audit_event, logger
+
+class OrderEventBroadcaster:
+    """Singleton in-memory PubSub for real-time SSE streaming to Admin Dashboards."""
+    _instance: Optional["OrderEventBroadcaster"] = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(OrderEventBroadcaster, cls).__new__(cls)
+            cls._instance._subscribers = set()
+            cls._instance._lock = asyncio.Lock()
+        return cls._instance
+
+    async def subscribe(self) -> asyncio.Queue:
+        queue = asyncio.Queue(maxsize=100)
+        async with self._lock:
+            self._subscribers.add(queue)
+        return queue
+
+    async def unsubscribe(self, queue: asyncio.Queue):
+        async with self._lock:
+            self._subscribers.discard(queue)
+
+    async def broadcast(self, event_type: str, data: Dict[str, Any]):
+        async with self._lock:
+            dead_queues = set()
+            for queue in self._subscribers:
+                try:
+                    queue.put_nowait({"event": event_type, "data": data, "timestamp": datetime.now(timezone.utc).isoformat()})
+                except asyncio.QueueFull:
+                    dead_queues.add(queue)
+                except Exception:
+                    dead_queues.add(queue)
+            for q in dead_queues:
+                self._subscribers.discard(q)
+
+order_broadcaster = OrderEventBroadcaster()
+_checkout_mutex = asyncio.Lock()
 
 class OrderService:
     def __init__(
@@ -135,7 +174,7 @@ class OrderService:
         await self.repo.clear_cart(user_id)
         return await self.get_cart(user_id)
 
-    # 2. Checkout & Order Placement
+    # 2. Checkout & Order Placement with Atomic Stock Reservation & Queue Lock
     async def checkout(self, user_id: str, req: CheckoutRequest) -> OrderResponse:
         user = await self.db.users.find_one({"id": user_id})
         if not user:
@@ -145,29 +184,61 @@ class OrderService:
         if not cart.items:
             raise BadRequestException("Your cart is empty")
 
-        order_items: List[OrderItemDetail] = []
-        for item in cart.items:
-            if not item.in_stock or item.stock_count < item.quantity:
-                raise OutOfStockException(
-                    f"'{item.name}' is out of stock or insufficient quantity (Available: {item.stock_count}, Requested: {item.quantity})"
-                )
-
-            order_items.append(
-                OrderItemDetail(
-                    medicine_id=item.medicine_id,
-                    name=item.name,
-                    brand=item.brand,
-                    strength=item.strength,
-                    unit_price=item.unit_price,
-                    quantity=item.quantity,
-                    total_price=item.total_price
-                )
-            )
-
         if cart.has_prescription_items and not req.prescription_urls:
             raise BadRequestException(
                 "One or more items in your cart require a doctor's prescription. Please upload prescription images."
             )
+
+        # Concurrency & Race-Condition Safe Stock Reservation
+        decremented_items: List[tuple[str, int]] = []
+        order_items: List[OrderItemDetail] = []
+
+        async with _checkout_mutex:
+            try:
+                for item in cart.items:
+                    # Atomic conditional decrement
+                    updated_med = await self.db.medicines.find_one_and_update(
+                        {"id": item.medicine_id, "stock_count": {"$gte": item.quantity}},
+                        {"$inc": {"stock_count": -item.quantity}},
+                        return_document=ReturnDocument.AFTER
+                    )
+
+                    if not updated_med:
+                        # Fetch current remaining stock for a helpful message
+                        current_med = await self.db.medicines.find_one({"id": item.medicine_id})
+                        available = current_med.get("stock_count", 0) if current_med else 0
+                        raise OutOfStockException(
+                            f"'{item.name}' is out of stock or has insufficient available quantity (Available: {available}, Requested: {item.quantity}). Please adjust your cart."
+                        )
+
+                    decremented_items.append((item.medicine_id, item.quantity))
+
+                    # Update in_stock flag if zero
+                    if updated_med.get("stock_count", 0) <= 0:
+                        await self.db.medicines.update_one(
+                            {"id": item.medicine_id},
+                            {"$set": {"in_stock": False}}
+                        )
+
+                    order_items.append(
+                        OrderItemDetail(
+                            medicine_id=item.medicine_id,
+                            name=item.name,
+                            brand=item.brand,
+                            strength=item.strength,
+                            unit_price=item.unit_price,
+                            quantity=item.quantity,
+                            total_price=item.total_price
+                        )
+                    )
+            except Exception as ex:
+                # Compensation Rollback: Restore any items decremented before failure
+                for med_id, qty in decremented_items:
+                    await self.db.medicines.update_one(
+                        {"id": med_id},
+                        {"$inc": {"stock_count": qty}, "$set": {"in_stock": True}}
+                    )
+                raise ex
 
         order_number = generate_invoice_number(prefix="ORD")
         subtotal = cart.subtotal
@@ -177,63 +248,154 @@ class OrderService:
         now = datetime.now(timezone.utc)
         initial_tracking = [
             {
-                "status": OrderStatus.PENDING_PAYMENT.value,
-                "note": "Order placed. Awaiting bKash payment verification.",
+                "status": OrderStatus.CONFIRMED.value,
+                "note": "Order placed and confirmed. Items reserved from pharmacy inventory.",
                 "timestamp": now
             }
         ]
 
+        delivery_addr_dict = req.delivery_address.model_dump()
+        if not delivery_addr_dict.get("id"):
+            delivery_addr_dict["id"] = str(uuid.uuid4())
+
         order_doc = {
             "order_number": order_number,
             "user_id": user_id,
-            "user_name": user.get("name", "Customer"),
-            "user_phone": user.get("phone", ""),
+            "user_name": user.get("name", req.delivery_address.recipient_name or "Customer"),
+            "user_phone": req.delivery_address.recipient_phone or user.get("phone", ""),
             "items": [it.model_dump() for it in order_items],
             "subtotal": subtotal,
             "delivery_fee": delivery_fee,
             "total_amount": total_amount,
-            "delivery_address": req.delivery_address.model_dump(),
-            "status": OrderStatus.PENDING_PAYMENT.value,
+            "delivery_address": delivery_addr_dict,
+            "status": OrderStatus.CONFIRMED.value, # CONFIRMED is default as per directive
             "merchant_invoice_number": order_number,
             "requires_prescription": cart.has_prescription_items,
             "prescription_urls": req.prescription_urls or [],
             "customer_notes": req.customer_notes,
             "tracking_history": initial_tracking,
-            "created_at": now
+            "created_at": now,
+            "updated_at": now
         }
 
         created = await self.repo.create_order(order_doc)
 
+        # Clear cart on successful order placement
+        await self.repo.clear_cart(user_id)
+
+        # Auto-save delivery address if not already present in user's saved addresses
         try:
-            payment_res = await self.payment_service.initiate_payment(
-                user_id=user_id,
-                payer_phone=req.delivery_address.recipient_phone or user.get("phone", "01700000000"),
-                amount=total_amount,
-                target_type=PaymentTargetType.PHARMACY_ORDER,
-                target_id=created["id"],
-                merchant_invoice_number=order_number
+            existing_addrs = user.get("addresses", [])
+            already_saved = any(
+                a.get("street_address") == delivery_addr_dict.get("street_address") and
+                a.get("district") == delivery_addr_dict.get("district")
+                for a in existing_addrs
             )
-
-            await self.db.orders.update_one(
-                {"id": created["id"]},
-                {"$set": {"payment_id": payment_res.payment_id, "payment_url": payment_res.bkash_url}}
-            )
-            created["payment_id"] = payment_res.payment_id
-            created["payment_url"] = payment_res.bkash_url
+            if not already_saved:
+                await self.db.users.update_one(
+                    {"id": user_id},
+                    {"$push": {"addresses": delivery_addr_dict}}
+                )
         except Exception as e:
-            await self.repo.update_order_status(created["id"], OrderStatus.CANCELLED, "Payment gateway initialization failed")
-            raise BadRequestException(f"Payment gateway error: {str(e)}")
+            logger.warning(f"Failed to auto-save checkout address to user profile: {e}")
 
+        # Log audit event
         await log_audit_event(
             self.db,
             user_id=user_id,
             action=AuditAction.ORDER_PLACED,
             target_type="ORDER",
             target_id=created["id"],
-            details={"total_amount": total_amount, "items_count": len(order_items)}
+            details={"total_amount": total_amount, "items_count": len(order_items), "order_number": order_number}
         )
 
-        return self._format_order_response(created)
+        formatted = self._format_order_response(created)
+
+        # Broadcast new order to Admin Real-Time SSE Stream
+        await order_broadcaster.broadcast(
+            "order_created",
+            formatted.model_dump(mode="json")
+        )
+
+        return formatted
+
+    # 3. User Order Cancellation with Stock Restoration
+    async def cancel_order(
+        self,
+        order_id: str,
+        user_id: str,
+        user_role: str,
+        reason: Optional[str] = None
+    ) -> OrderResponse:
+        order = await self.repo.get_order_by_id(order_id)
+        if not order:
+            raise NotFoundException("Order not found")
+
+        # Authorization: user can only cancel their own order, ADMIN can cancel any
+        if user_role != UserRole.ADMIN.value and order.get("user_id") != user_id:
+            raise ForbiddenException("You are not authorized to cancel this order")
+
+        current_status = order.get("status")
+
+        # Cancellation Rule: Only permitted when status is CONFIRMED or PROCESSING (below SHIPPED)
+        if current_status in [OrderStatus.SHIPPED.value, OrderStatus.DELIVERED.value]:
+            raise BadRequestException(
+                f"Order #{order.get('order_number')} cannot be cancelled because it is already {current_status}. Please contact support."
+            )
+
+        if current_status == OrderStatus.CANCELLED.value:
+            raise BadRequestException("Order is already cancelled")
+
+        cancel_note = reason or ("Cancelled by customer" if user_role != UserRole.ADMIN.value else "Cancelled by administration")
+
+        # Atomically update status
+        updated = await self.repo.update_order_status(
+            order_id=order_id,
+            new_status=OrderStatus.CANCELLED,
+            tracking_note=cancel_note
+        )
+
+        # Atomically restore stock in pharmacy inventory
+        for it in order.get("items", []):
+            med_id = it.get("medicine_id")
+            qty = it.get("quantity", 0)
+            if med_id and qty > 0:
+                await self.db.medicines.update_one(
+                    {"id": med_id},
+                    {"$inc": {"stock_count": qty}, "$set": {"in_stock": True}}
+                )
+
+        # Send in-app notification
+        await self.db.notifications.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": order["user_id"],
+            "type": NotificationType.ORDER_STATUS_UPDATE.value,
+            "title": f"Order #{order.get('order_number')} Cancelled",
+            "message": f"Your order has been cancelled: {cancel_note}",
+            "payload": {"order_id": order_id, "status": OrderStatus.CANCELLED.value},
+            "is_read": False,
+            "created_at": datetime.now(timezone.utc)
+        })
+
+        # Log audit event
+        await log_audit_event(
+            self.db,
+            user_id=user_id,
+            action=AuditAction.ORDER_STATUS_CHANGED,
+            target_type="ORDER",
+            target_id=order_id,
+            details={"status": OrderStatus.CANCELLED.value, "reason": cancel_note}
+        )
+
+        formatted = self._format_order_response(updated)
+
+        # Broadcast update to Admin Real-Time SSE Stream
+        await order_broadcaster.broadcast(
+            "order_cancelled",
+            formatted.model_dump(mode="json")
+        )
+
+        return formatted
 
     async def get_user_orders(
         self,
@@ -288,6 +450,20 @@ class OrderService:
         if not order:
             raise NotFoundException("Order not found")
 
+        old_status = order.get("status")
+        new_status = req.status.value
+
+        # If transitioning to CANCELLED, restore stock
+        if req.status == OrderStatus.CANCELLED and old_status != OrderStatus.CANCELLED.value:
+            for it in order.get("items", []):
+                med_id = it.get("medicine_id")
+                qty = it.get("quantity", 0)
+                if med_id and qty > 0:
+                    await self.db.medicines.update_one(
+                        {"id": med_id},
+                        {"$inc": {"stock_count": qty}, "$set": {"in_stock": True}}
+                    )
+
         updated = await self.repo.update_order_status(
             order_id=order_id,
             new_status=req.status,
@@ -311,10 +487,34 @@ class OrderService:
             action=AuditAction.ORDER_STATUS_CHANGED,
             target_type="ORDER",
             target_id=order_id,
-            details={"new_status": req.status.value, "note": req.tracking_note}
+            details={"old_status": old_status, "new_status": req.status.value, "note": req.tracking_note}
         )
 
-        return self._format_order_response(updated)
+        formatted = self._format_order_response(updated)
+
+        # Broadcast status update to Admin Real-Time SSE Stream
+        await order_broadcaster.broadcast(
+            "order_updated",
+            formatted.model_dump(mode="json")
+        )
+
+        return formatted
+
+    async def get_orders_stream(self) -> AsyncGenerator[str, None]:
+        """Real-time SSE event stream for admin order dashboard."""
+        queue = await order_broadcaster.subscribe()
+        try:
+            # Yield initial connection confirmation
+            yield f"event: connected\ndata: {json.dumps({'status': 'connected', 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
+            while True:
+                try:
+                    # Timeout for heartbeat ping every 15s
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    yield f"event: {event['event']}\ndata: {json.dumps(event['data'])}\n\n"
+                except asyncio.TimeoutError:
+                    yield f": heartbeat {datetime.now(timezone.utc).isoformat()}\n\n"
+        finally:
+            await order_broadcaster.unsubscribe(queue)
 
     def _format_order_response(self, order: Dict[str, Any]) -> OrderResponse:
         return OrderResponse(

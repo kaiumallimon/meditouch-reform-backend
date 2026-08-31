@@ -30,6 +30,14 @@ async def update_profile(
     details = await service.update_profile(payload["sub"], req)
     return APIResponse(success=True, message="Profile updated successfully", data=details)
 
+@router.get("/addresses", response_model=APIResponse[list[AddressSchema]])
+async def get_addresses(
+    payload: dict = Depends(get_current_user_payload),
+    service: UserService = Depends(get_user_service)
+):
+    addresses = await service.get_addresses(payload["sub"])
+    return APIResponse(success=True, message="Addresses retrieved", data=addresses)
+
 @router.post("/addresses", response_model=APIResponse[list[AddressSchema]], status_code=status.HTTP_201_CREATED)
 async def add_address(
     req: AddressSchema,
@@ -38,4 +46,13 @@ async def add_address(
 ):
     addresses = await service.add_address(payload["sub"], req)
     return APIResponse(success=True, message="Address added successfully", data=addresses)
+
+@router.delete("/addresses/{address_id}", response_model=APIResponse[list[AddressSchema]])
+async def delete_address(
+    address_id: str,
+    payload: dict = Depends(get_current_user_payload),
+    service: UserService = Depends(get_user_service)
+):
+    addresses = await service.delete_address(payload["sub"], address_id)
+    return APIResponse(success=True, message="Address removed successfully", data=addresses)
 
