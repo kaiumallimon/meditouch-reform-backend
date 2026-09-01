@@ -19,8 +19,6 @@
 [E-Pharmacy & Stock Engine](#-concurrency-safe-e-pharmacy-engine) •
 [Clinical AI Agent](#-autonomous-clinical-ai-agent) •
 [API Reference](#-api-endpoints--modules) •
-[Quickstart](#-getting-started) •
-[Testing](#-testing--verification)
 
 </div>
 
@@ -252,84 +250,6 @@ backend/
 | **Payments** | `/api/v1/payments` | `POST /bkash/create`, `POST /bkash/execute`, `GET /bkash/callback` | bKash tokenized gateway flows |
 | **Admin & Control** | `/api/v1/admin` | `GET /dashboard/stats`, `GET /orders/stream`, `POST /pharmacy/crawler/start` | Real-time administrative controls & crawler |
 | **Health** | `/health` | `GET /health` | Service uptime and database connectivity probe |
-
----
-
-## 🛠️ Getting Started
-
-### Prerequisites
-- **Python**: Version `3.11+`
-- **MongoDB**: Local instance running on port `27017` or a MongoDB Atlas cluster URI
-- **Virtual Environment**: `venv` or `conda`
-
-### 1. Clone & Setup Virtual Environment
-```bash
-# Navigate to the backend directory
-cd backend
-
-# Create a virtual environment
-python -m venv venv
-
-# Activate the virtual environment
-# On Windows (PowerShell):
-.\venv\Scripts\Activate.ps1
-# On Linux/macOS:
-source venv/bin/activate
-```
-
-### 2. Install Dependencies
-```bash
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-### 3. Configure Environment Variables
-Create a `.env` file in the `backend/` root:
-
-```ini
-PROJECT_NAME="MediTouch Backend API"
-ENVIRONMENT="development"
-DEBUG=True
-API_V1_STR="/api/v1"
-
-# Database Configuration
-MONGODB_URL="mongodb://localhost:27017"
-MONGODB_DB_NAME="meditouch"
-
-# Security & JWT
-JWT_SECRET_KEY="your-secure-32-byte-secret-key-here"
-JWT_REFRESH_SECRET_KEY="your-secure-refresh-key-here"
-JWT_ALGORITHM="HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES=10080
-REFRESH_TOKEN_EXPIRE_DAYS=30
-
-# Business Constants
-PLATFORM_FEE_PERCENTAGE=10.0
-PLATFORM_DELIVERY_FEE_BDT=85.0
-
-# Multi-Provider AI LLM (Groq & OpenRouter)
-GROQ_API_KEY="gsk_your_groq_api_key"
-GROQ_MODEL="llama-3.3-70b-versatile"
-OPENROUTER_API_KEY="sk-or-your_openrouter_key"
-
-# Media CDN & Video Engine
-CLOUDINARY_CLOUD_NAME="your_cloud_name"
-CLOUDINARY_API_KEY="your_api_key"
-CLOUDINARY_API_SECRET="your_api_secret"
-ZEGOCLOUD_APP_ID=123456789
-ZEGOCLOUD_SERVER_SECRET="your_zegocloud_server_secret"
-```
-
-### 4. Run the Development Server
-```bash
-# Start FastAPI with hot reload
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-Interactive API documentation will be available at:
-- **Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
-- **ReDoc UI**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
-- **Health Check**: [http://localhost:8000/health](http://localhost:8000/health)
 
 ---
 
