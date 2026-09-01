@@ -4,6 +4,8 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.modules.doctors.repository import DoctorRepository
 from app.modules.doctors.schemas import (
     DoctorProfileResponse,
+    DoctorDetailResponse,
+    DoctorSpecialtyResponse,
     UpdateDoctorProfileRequest,
     CreateTimeslotRequest,
     TimeslotResponse,
@@ -25,13 +27,25 @@ class DoctorService:
             raise NotFoundException("Doctor profile not found")
         return DoctorProfileResponse(**doc)
 
-    async def get_doctor_profile_by_id(self, doctor_id: str) -> DoctorProfileResponse:
+    async def get_doctor_profile_by_id(self, doctor_id: str) -> DoctorDetailResponse:
         doc = await self.repo.get_by_id(doctor_id)
         if not doc:
             raise NotFoundException("Doctor not found")
         doc_copy = doc.copy()
         doc_copy.pop("verification_documents", None)
-        return DoctorProfileResponse(**doc_copy)
+
+        now = datetime.now(timezone.utc)
+        upcoming_slots_docs = await self.repo.get_doctor_timeslots(
+            doctor_id=doctor_id,
+            status=TimeslotStatus.AVAILABLE,
+            start_time_gte=now
+        )
+        upcoming_slots = [TimeslotResponse(**s) for s in upcoming_slots_docs[:20]]
+        next_slot = upcoming_slots[0].start_time if upcoming_slots else None
+
+        doc_copy["next_available_slot"] = next_slot
+        doc_copy["upcoming_timeslots"] = upcoming_slots
+        return DoctorDetailResponse(**doc_copy)
 
     async def update_my_doctor_profile(self, user_id: str, req: UpdateDoctorProfileRequest) -> DoctorProfileResponse:
         doc = await self.repo.get_by_user_id(user_id)
@@ -69,12 +83,51 @@ class DoctorService:
             search=filters.search,
             min_fee=filters.min_fee,
             max_fee=filters.max_fee,
+            min_experience=filters.min_experience,
+            min_rating=filters.min_rating,
+            sort_by=filters.sort_by,
             only_active_verified=True,
             skip=pagination.skip,
             limit=pagination.limit
         )
         items = [DoctorProfileResponse(**d) for d in docs]
         return PaginatedResponse.create(items=items, total=total, params=pagination)
+
+    async def get_specialties(self) -> List[DoctorSpecialtyResponse]:
+        specs = await self.repo.get_specialties()
+        specialty_icons = {
+            "General Physician": "stethoscope",
+            "General Medicine": "stethoscope",
+            "Cardiologist": "heart-pulse",
+            "Cardiology": "heart-pulse",
+            "Dermatologist": "sparkles",
+            "Dermatology": "sparkles",
+            "Pediatrician": "baby",
+            "Pediatrics": "baby",
+            "Neurologist": "activity",
+            "Neurology": "activity",
+            "Gynecologist": "shield-check",
+            "Gynecology": "shield-check",
+            "Orthopedic": "bone",
+            "Orthopedics": "bone",
+            "Psychiatrist": "brain",
+            "Psychiatry": "brain",
+            "ENT Specialist": "ear",
+            "Ophthalmologist": "eye",
+        }
+        return [
+            DoctorSpecialtyResponse(
+                specialty=s["specialty"],
+                doctor_count=s["doctor_count"],
+                icon_name=specialty_icons.get(s["specialty"], "stethoscope"),
+                description=f"Consult verified {s['specialty']} specialists"
+            )
+            for s in specs
+        ]
+
+    async def get_featured_doctors(self, limit: int = 10) -> List[DoctorProfileResponse]:
+        docs = await self.repo.get_featured_doctors(limit)
+        return [DoctorProfileResponse(**d) for d in docs]
 
     async def create_doctor_timeslots(self, user_id: str, slots: List[CreateTimeslotRequest]) -> List[TimeslotResponse]:
         doc = await self.repo.get_by_user_id(user_id)

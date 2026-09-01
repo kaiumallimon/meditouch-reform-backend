@@ -241,7 +241,7 @@ backend/
 | :--- | :--- | :--- | :--- |
 | **Authentication** | `/api/v1/auth` | `POST /register`, `POST /login`, `POST /refresh`, `POST /logout` | Secure JWT authentication with role authorization |
 | **Users & Addresses** | `/api/v1/users` | `GET /profile`, `PUT /profile`, `GET /addresses`, `POST /addresses` | User profile & reusable address management |
-| **Doctors** | `/api/v1/doctors` | `GET /`, `GET /{id}`, `GET /specialties`, `GET /{id}/slots` | Doctor discovery, chamber slots & scheduling |
+| **Doctors** | `/api/v1/doctors` | `GET /`, `GET /{id}`, `GET /specialties`, `GET /featured`, `GET /{id}/timeslots` | Doctor discovery, search/filtering, specialties & chamber slots |
 | **Appointments** | `/api/v1/appointments` | `GET /`, `POST /book`, `PUT /{id}/status`, `POST /{id}/cancel` | Appointment booking & status lifecycle |
 | **Consultations** | `/api/v1/consultations` | `GET /{id}`, `POST /{id}/token`, `POST /{id}/prescription` | ZEGOCLOUD room tokens & prescription builder |
 | **Pharmacy** | `/api/v1/pharmacy` | `GET /medicines`, `GET /medicines/{slug_or_id}/details`, `GET /categories`, `GET /stats` | E-pharmacy catalog, monographs & search |

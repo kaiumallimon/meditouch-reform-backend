@@ -40,6 +40,9 @@ class DoctorRepository:
         search: Optional[str] = None,
         min_fee: Optional[float] = None,
         max_fee: Optional[float] = None,
+        min_experience: Optional[int] = None,
+        min_rating: Optional[float] = None,
+        sort_by: Optional[str] = "rating_desc",
         only_active_verified: bool = True,
         skip: int = 0,
         limit: int = 20
@@ -49,29 +52,76 @@ class DoctorRepository:
             query["is_verified"] = True
             query["is_active"] = True
 
-        if specialty:
-            query["specialties"] = {"$regex": f"^{re.escape(specialty)}$", "$options": "i"}
+        if specialty and specialty.strip() and specialty.upper() != "ALL":
+            clean_spec = specialty.strip()
+            query["specialties"] = {"$regex": re.escape(clean_spec), "$options": "i"}
 
         if min_fee is not None or max_fee is not None:
             fee_query = {}
             if min_fee is not None:
-                fee_query["$gte"] = min_fee
+                fee_query["$gte"] = float(min_fee)
             if max_fee is not None:
-                fee_query["$lte"] = max_fee
+                fee_query["$lte"] = float(max_fee)
             query["consultation_fee"] = fee_query
 
-        if search:
-            search_regex = {"$regex": re.escape(search), "$options": "i"}
+        if min_experience is not None:
+            query["experience_years"] = {"$gte": int(min_experience)}
+
+        if min_rating is not None:
+            query["rating"] = {"$gte": float(min_rating)}
+
+        if search and search.strip():
+            search_regex = {"$regex": re.escape(search.strip()), "$options": "i"}
             query["$or"] = [
                 {"name": search_regex},
                 {"specialties": search_regex},
-                {"qualifications": search_regex}
+                {"qualifications": search_regex},
+                {"bio": search_regex},
+                {"hospital_affiliations": search_regex}
             ]
 
+        # Sorting logic
+        sort_criteria = [("rating", -1), ("total_reviews", -1)]
+        if sort_by == "fee_asc":
+            sort_criteria = [("consultation_fee", 1), ("rating", -1)]
+        elif sort_by == "fee_desc":
+            sort_criteria = [("consultation_fee", -1), ("rating", -1)]
+        elif sort_by == "experience_desc":
+            sort_criteria = [("experience_years", -1), ("rating", -1)]
+        elif sort_by in ("consultations_desc", "popular"):
+            sort_criteria = [("total_consultations", -1), ("rating", -1)]
+        elif sort_by == "name_asc":
+            sort_criteria = [("name", 1)]
+        elif sort_by == "rating_desc":
+            sort_criteria = [("rating", -1), ("total_reviews", -1)]
+
         total = await self.db.doctors.count_documents(query)
-        cursor = self.db.doctors.find(query).skip(skip).limit(limit).sort("rating", -1)
+        cursor = self.db.doctors.find(query).skip(skip).limit(limit).sort(sort_criteria)
         items = await cursor.to_list(length=limit)
         return items, total
+
+    async def get_specialties(self) -> List[Dict[str, Any]]:
+        """Aggregate unique medical specialties with doctor counts."""
+        pipeline = [
+            {"$match": {"is_verified": True, "is_active": True}},
+            {"$unwind": "$specialties"},
+            {
+                "$group": {
+                    "_id": "$specialties",
+                    "doctor_count": {"$sum": 1}
+                }
+            },
+            {"$sort": {"doctor_count": -1, "_id": 1}}
+        ]
+        results = await self.db.doctors.aggregate(pipeline).to_list(length=100)
+        return [{"specialty": doc["_id"], "doctor_count": doc["doctor_count"]} for doc in results]
+
+    async def get_featured_doctors(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get top-rated active verified doctors for mobile showcase."""
+        cursor = self.db.doctors.find(
+            {"is_verified": True, "is_active": True}
+        ).sort([("rating", -1), ("total_reviews", -1)]).limit(limit)
+        return await cursor.to_list(length=limit)
 
     async def create_timeslot(self, slot_doc: Dict[str, Any]) -> Dict[str, Any]:
         if "id" not in slot_doc:

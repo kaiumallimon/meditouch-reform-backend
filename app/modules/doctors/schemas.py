@@ -51,9 +51,44 @@ class TimeslotResponse(BaseModel):
     status: TimeslotStatus
     created_at: Optional[datetime] = None
 
+class DoctorSpecialtyResponse(BaseModel):
+    specialty: str
+    doctor_count: int
+    icon_name: Optional[str] = None
+    description: Optional[str] = None
+
+class DoctorDetailResponse(BaseModel):
+    id: str
+    user_id: str
+    name: str
+    phone: str
+    email: Optional[str] = None
+    bmdc_reg_number: str
+    specialties: List[str] = Field(default_factory=list)
+    qualifications: List[str] = Field(default_factory=list)
+    experience_years: int = 0
+    bio: Optional[str] = None
+    avatar_url: Optional[str] = None
+    consultation_fee: float = 0.0
+    is_verified: bool = False
+    verification_status: DoctorVerificationStatus = DoctorVerificationStatus.PENDING
+    is_active: bool = False
+    rating: float = 5.0
+    total_reviews: int = 0
+    total_consultations: int = 0
+    hospital_affiliations: List[str] = Field(default_factory=list)
+    languages: List[str] = Field(default_factory=lambda: ["English", "Bengali"])
+    available_days: List[str] = Field(default_factory=list)
+    next_available_slot: Optional[datetime] = None
+    upcoming_timeslots: List[TimeslotResponse] = Field(default_factory=list)
+
 class DoctorFilterParams(BaseModel):
     specialty: Optional[str] = None
     search: Optional[str] = None
     min_fee: Optional[float] = None
     max_fee: Optional[float] = None
+    min_experience: Optional[int] = None
+    min_rating: Optional[float] = None
+    sort_by: Optional[str] = "rating_desc"
+    available_today: Optional[bool] = None
 
