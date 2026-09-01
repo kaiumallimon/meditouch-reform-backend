@@ -91,7 +91,7 @@ async def stream_admin_orders(
     service: OrderService = Depends(get_order_service)
 ):
     """Real-time SSE event stream for admin order dashboard."""
-    generator = await service.get_orders_stream()
+    generator = service.get_orders_stream()
     return StreamingResponse(
         generator,
         media_type="text/event-stream",

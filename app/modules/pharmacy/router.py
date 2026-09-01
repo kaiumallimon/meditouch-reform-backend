@@ -16,7 +16,9 @@ from app.modules.pharmacy.schemas import (
     UpdateCrawlerSettingsRequest,
     CrawlerStartRequest,
     CrawlerJobStatusResponse,
-    PharmacyStatsResponse
+    PharmacyStatsResponse,
+    StockUpdateRequest,
+    BatchStockUpdateRequest,
 )
 from app.common.enums import UserRole
 from app.common.pagination import PaginationParams, PaginatedResponse
