@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import StreamingResponse
-from typing import Optional
+from typing import Optional, Dict, Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.db.mongodb import get_db
 from app.modules.orders.repository import OrderRepository
@@ -102,9 +102,21 @@ async def stream_admin_orders(
         }
     )
 
+@router.get("/admin/stats", response_model=APIResponse[Dict[str, Any]])
+async def get_order_stats_admin(
+    payload: dict = Depends(get_current_user_payload),
+    service: OrderService = Depends(get_order_service)
+):
+    if payload.get("role") != UserRole.ADMIN.value:
+        raise ForbiddenException("Only ADMIN can view order statistics")
+    stats = await service.get_order_stats_admin()
+    return APIResponse(success=True, message="Order statistics retrieved", data=stats)
+
 @router.get("/admin/all", response_model=APIResponse[PaginatedResponse[OrderResponse]])
 async def get_all_orders_admin(
     status: Optional[OrderStatus] = Query(None),
+    search: Optional[str] = Query(None),
+    sort_by: Optional[str] = Query("created_desc"),
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=100),
     payload: dict = Depends(get_current_user_payload),
@@ -113,7 +125,7 @@ async def get_all_orders_admin(
     if payload.get("role") != UserRole.ADMIN.value:
         raise ForbiddenException("Only ADMIN can view all orders")
     pagination = PaginationParams(page=page, limit=limit)
-    orders = await service.get_all_orders_admin(status, pagination)
+    orders = await service.get_all_orders_admin(status, pagination, search=search, sort_by=sort_by)
     return APIResponse(success=True, message="All orders retrieved", data=orders)
 
 @router.get("/{order_id}", response_model=APIResponse[OrderResponse])

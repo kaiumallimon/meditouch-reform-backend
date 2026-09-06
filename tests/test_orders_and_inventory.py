@@ -162,3 +162,134 @@ async def test_admin_realtime_broadcaster():
     assert event['data']['id'] == 'ord_999'
 
     await broadcaster.unsubscribe(queue)
+
+@pytest.mark.asyncio
+async def test_order_item_images_and_multi_item_support():
+    mock_db = MagicMock()
+    mock_order_repo = AsyncMock()
+    mock_pharm_repo = AsyncMock()
+    mock_pay_service = AsyncMock()
+
+    service = OrderService(mock_order_repo, mock_pharm_repo, mock_pay_service, mock_db)
+
+    order_doc = {
+        'id': 'ord_img_1',
+        'order_number': 'ORD-IMG-1',
+        'user_id': 'user_1',
+        'user_name': 'Test Customer',
+        'user_phone': '01700000000',
+        'status': OrderStatus.CONFIRMED.value,
+        'subtotal': 150.0,
+        'delivery_fee': 85.0,
+        'total_amount': 235.0,
+        'items': [
+            {
+                'medicine_id': 'med_1',
+                'name': 'Napa Extra 500mg',
+                'brand': 'Beximco',
+                'strength': '500mg',
+                'unit_price': 2.5,
+                'quantity': 2,
+                'total_price': 5.0,
+                'image': 'https://api.medeasy.health/media/medicines/napa.jpg'
+            },
+            {
+                'medicine_id': 'med_2',
+                'name': 'A-Cal D 500 mg+200 IU',
+                'brand': 'Square',
+                'strength': '500mg+200IU',
+                'unit_price': 7.0,
+                'quantity': 1,
+                'total_price': 7.0,
+                'image': 'https://api.medeasy.health/media/medicines/a-cal.jpg'
+            }
+        ],
+        'delivery_address': {
+            'recipient_name': 'Test Customer',
+            'recipient_phone': '01700000000',
+            'street_address': 'Dhanmondi 27',
+            'district': 'Dhaka',
+            'division': 'Dhaka',
+            'upazila_or_thana': 'Dhanmondi'
+        }
+    }
+
+    mock_order_repo.get_order_by_id.return_value = order_doc
+    order_res = await service.get_order_by_id('ord_img_1', 'user_1', UserRole.ADMIN.value)
+
+    assert len(order_res.items) == 2
+    assert order_res.items[0].image == 'https://api.medeasy.health/media/medicines/napa.jpg'
+    assert order_res.items[1].image == 'https://api.medeasy.health/media/medicines/a-cal.jpg'
+    assert order_res.items[0].name == 'Napa Extra 500mg'
+
+@pytest.mark.asyncio
+async def test_admin_orders_search_sort_and_stats():
+    from app.common.pagination import PaginationParams
+
+    mock_db = MagicMock()
+    mock_order_repo = AsyncMock()
+    mock_pharm_repo = AsyncMock()
+    mock_pay_service = AsyncMock()
+
+    service = OrderService(mock_order_repo, mock_pharm_repo, mock_pay_service, mock_db)
+
+    mock_order_repo.get_all_orders.return_value = (
+        [
+            {
+                'id': 'ord_1',
+                'order_number': 'ORD-1',
+                'user_id': 'u1',
+                'status': 'CONFIRMED',
+                'items': [],
+                'delivery_address': {'recipient_name': 'Test', 'recipient_phone': '017', 'street_address': 'X'}
+            }
+        ],
+        1
+    )
+
+    pagination = PaginationParams(page=1, limit=20)
+    res = await service.get_all_orders_admin(
+        status=None,
+        pagination=pagination,
+        search="ORD-1",
+        sort_by="amount_desc"
+    )
+
+    mock_order_repo.get_all_orders.assert_called_once_with(
+        status=None,
+        search="ORD-1",
+        sort_by="amount_desc",
+        skip=0,
+        limit=20
+    )
+    assert res.total == 1
+    assert len(res.items) == 1
+
+    # Test get_order_stats_admin
+    mock_order_repo.get_order_stats.return_value = {
+        'total_orders': 10,
+        'confirmed_count': 3,
+        'processing_count': 2,
+        'shipped_count': 1,
+        'delivered_count': 3,
+        'cancelled_count': 1,
+        'total_revenue': 2540.50
+    }
+
+    stats = await service.get_order_stats_admin()
+    assert stats['total_orders'] == 10
+    assert stats['confirmed_count'] == 3
+    assert stats['total_revenue'] == 2540.50
+
+def test_app_main_and_orders_router_import_clean():
+    # Verify app.main and orders router can be imported without NameError/SyntaxError
+    from app.modules.orders.router import router as orders_router
+    from app.main import app
+
+    assert orders_router is not None
+    assert app is not None
+    # Verify /admin/stats and /admin/all routes exist on orders router
+    paths = [route.path for route in orders_router.routes]
+    assert '/admin/stats' in paths
+    assert '/admin/all' in paths
+

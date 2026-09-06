@@ -84,6 +84,8 @@ class OrderRepository:
     async def get_all_orders(
         self,
         status: Optional[OrderStatus] = None,
+        search: Optional[str] = None,
+        sort_by: Optional[str] = "created_desc",
         skip: int = 0,
         limit: int = 20
     ) -> Tuple[List[Dict[str, Any]], int]:
@@ -91,8 +93,77 @@ class OrderRepository:
         if status:
             query["status"] = status.value if isinstance(status, OrderStatus) else status
 
+        if search and search.strip():
+            s = search.strip()
+            query["$or"] = [
+                {"order_number": {"$regex": s, "$options": "i"}},
+                {"user_name": {"$regex": s, "$options": "i"}},
+                {"user_phone": {"$regex": s, "$options": "i"}},
+                {"delivery_address.recipient_name": {"$regex": s, "$options": "i"}},
+                {"delivery_address.recipient_phone": {"$regex": s, "$options": "i"}},
+                {"delivery_address.street_address": {"$regex": s, "$options": "i"}},
+                {"items.name": {"$regex": s, "$options": "i"}},
+                {"items.brand": {"$regex": s, "$options": "i"}},
+            ]
+
+        sort_field = "created_at"
+        sort_dir = -1
+        if sort_by == "created_asc":
+            sort_field, sort_dir = "created_at", 1
+        elif sort_by == "amount_desc":
+            sort_field, sort_dir = "total_amount", -1
+        elif sort_by == "amount_asc":
+            sort_field, sort_dir = "total_amount", 1
+        elif sort_by == "status_asc":
+            sort_field, sort_dir = "status", 1
+        elif sort_by == "customer_asc":
+            sort_field, sort_dir = "user_name", 1
+
         total = await self.db.orders.count_documents(query)
-        cursor = self.db.orders.find(query).skip(skip).limit(limit).sort("created_at", -1)
+        cursor = self.db.orders.find(query).sort(sort_field, sort_dir).skip(skip).limit(limit)
         items = await cursor.to_list(length=limit)
         return items, total
+
+    async def get_order_stats(self) -> Dict[str, Any]:
+        pipeline = [
+            {
+                "$group": {
+                    "_id": "$status",
+                    "count": {"$sum": 1},
+                    "total_amount": {"$sum": "$total_amount"}
+                }
+            }
+        ]
+        results = await self.db.orders.aggregate(pipeline).to_list(length=100)
+
+        counts = {
+            "CONFIRMED": 0,
+            "PROCESSING": 0,
+            "SHIPPED": 0,
+            "DELIVERED": 0,
+            "CANCELLED": 0,
+        }
+        total_orders = 0
+        total_revenue = 0.0
+
+        for r in results:
+            st = str(r.get("_id"))
+            c = int(r.get("count", 0))
+            amt = float(r.get("total_amount", 0.0))
+            if st in counts:
+                counts[st] = c
+            total_orders += c
+            if st != "CANCELLED":
+                total_revenue += amt
+
+        return {
+            "total_orders": total_orders,
+            "confirmed_count": counts["CONFIRMED"],
+            "processing_count": counts["PROCESSING"],
+            "shipped_count": counts["SHIPPED"],
+            "delivered_count": counts["DELIVERED"],
+            "cancelled_count": counts["CANCELLED"],
+            "total_revenue": round(total_revenue, 2)
+        }
+
 

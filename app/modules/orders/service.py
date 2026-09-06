@@ -420,15 +420,23 @@ class OrderService:
     async def get_all_orders_admin(
         self,
         status: Optional[OrderStatus],
-        pagination: PaginationParams
+        pagination: PaginationParams,
+        search: Optional[str] = None,
+        sort_by: Optional[str] = "created_desc"
     ) -> PaginatedResponse[OrderResponse]:
         docs, total = await self.repo.get_all_orders(
             status=status,
+            search=search,
+            sort_by=sort_by,
             skip=pagination.skip,
             limit=pagination.limit
         )
         items = [self._format_order_response(d) for d in docs]
         return PaginatedResponse.create(items=items, total=total, params=pagination)
+
+    async def get_order_stats_admin(self) -> Dict[str, Any]:
+        return await self.repo.get_order_stats()
+
 
     async def get_order_by_id(
         self,
