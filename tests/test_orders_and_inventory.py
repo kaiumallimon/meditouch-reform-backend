@@ -241,7 +241,14 @@ async def test_admin_orders_search_sort_and_stats():
                 'user_id': 'u1',
                 'status': 'CONFIRMED',
                 'items': [],
-                'delivery_address': {'recipient_name': 'Test', 'recipient_phone': '017', 'street_address': 'X'}
+                'delivery_address': {
+                    'recipient_name': 'Test',
+                    'recipient_phone': '017',
+                    'street_address': 'X',
+                    'division': 'Dhaka',
+                    'district': 'Dhaka',
+                    'upazila_or_thana': 'Dhanmondi'
+                }
             }
         ],
         1
@@ -290,6 +297,7 @@ def test_app_main_and_orders_router_import_clean():
     assert app is not None
     # Verify /admin/stats and /admin/all routes exist on orders router
     paths = [route.path for route in orders_router.routes]
-    assert '/admin/stats' in paths
-    assert '/admin/all' in paths
+    assert '/orders/admin/stats' in paths
+    assert '/orders/admin/all' in paths
+
 
