@@ -35,6 +35,7 @@ from app.modules.pharmacy.router import router as pharmacy_router
 from app.modules.orders.router import router as orders_router
 from app.modules.admin.router import router as admin_router
 from app.modules.media.router import router as media_router
+from app.modules.inventory.router import router as inventory_router
 from app.modules.agent.router import router as agent_chat_router, admin_chat_router
 
 @asynccontextmanager
@@ -119,6 +120,7 @@ app.include_router(payments_router, prefix=API_PREFIX)
 app.include_router(notifications_router, prefix=API_PREFIX)
 app.include_router(pharmacy_router, prefix=API_PREFIX)
 app.include_router(orders_router, prefix=API_PREFIX)
+app.include_router(inventory_router, prefix=API_PREFIX)
 app.include_router(admin_router, prefix=API_PREFIX)
 app.include_router(media_router, prefix=API_PREFIX)
 app.include_router(agent_chat_router, prefix=API_PREFIX)
