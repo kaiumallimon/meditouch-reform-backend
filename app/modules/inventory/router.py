@@ -12,8 +12,9 @@ from app.modules.inventory.schemas import (
 )
 from app.common.responses import APIResponse
 from app.common.enums import UserRole
-from app.core.security import get_current_user_payload
-from app.core.exceptions import ForbiddenException
+from fastapi.security import HTTPAuthorizationCredentials
+from app.core.security import get_current_user_payload, decode_token, security_scheme
+from app.core.exceptions import ForbiddenException, UnauthorizedException
 
 router = APIRouter(prefix="/inventory", tags=["Pharmacy Inventory & Stocks"])
 
@@ -129,11 +130,28 @@ async def list_transactions(
 
 @router.get("/export", response_class=Response)
 async def export_inventory_csv(
-    payload: dict = Depends(require_admin_or_staff),
+    token: Optional[str] = Query(None, description="Optional auth token for browser download"),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
     service: InventoryService = Depends(get_inventory_service)
 ):
+    raw_token = None
+    if credentials and credentials.credentials:
+        raw_token = credentials.credentials
+    elif token:
+        raw_token = token
+
+    if not raw_token:
+        raise UnauthorizedException("Authentication token is missing")
+
+    payload = decode_token(raw_token, is_refresh=False)
+    role = payload.get("role")
+    if role not in [UserRole.ADMIN.value, UserRole.DEVELOPER.value]:
+        raise ForbiddenException("Only ADMIN or authorized staff can access inventory operations")
+
     csv_content = await service.export_inventory_csv()
     headers = {
-        "Content-Disposition": "attachment; filename=meditouch_inventory_stocktake.csv"
+        "Content-Disposition": "attachment; filename=meditouch_inventory_stocktake.csv",
+        "Content-Type": "text/csv; charset=utf-8"
     }
     return Response(content=csv_content, media_type="text/csv", headers=headers)
+
